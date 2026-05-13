@@ -1,10 +1,14 @@
-# ghyper9023-self-workflow
+# @ghyper9023/pi-dev-workflow
 
-> ghyper9023 自用 pi-package，为 [pi coding agent](https://pi.dev/) 提供个性化技能、提示词、扩展和主题。
+> Developer workflow toolkit for [pi coding agent](https://pi.dev/): git agents, code review, Karpathy guidelines, themes
 
 ## 快速安装
 
 ```bash
+# 通过 npm 安装（推荐）
+pi install npm:@ghyper9023/pi-dev-workflow
+
+# 或通过 git 安装
 pi install git:github.com/cherish-ltt/ghyper9023-self-workflow
 ```
 
@@ -93,7 +97,10 @@ LLM 也可以直接调用 `subagent` 工具委派任务给任意子代理：
 ### 安装
 
 ```bash
-# 通过 git 安装（推荐，自动更新）
+# 通过 npm 安装（推荐）
+pi install npm:@ghyper9023/pi-dev-workflow
+
+# 或通过 git 安装
 pi install git:github.com/cherish-ltt/ghyper9023-self-workflow
 
 # 或从本地目录安装

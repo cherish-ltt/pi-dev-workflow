@@ -1,14 +1,14 @@
 {
-  "name": "pi-dev-workflow",
+  "name": "@ghyper9023/pi-dev-workflow",
   "version": "0.1.6",
   "keywords": ["pi-package"],
   "description": "Developer workflow toolkit for pi: git agents, code review, Karpathy guidelines, themes",
-  "keywords": [
-    "pi-package"
-  ],
   "homepage": "https://github.com/cherish-ltt/ghyper9023-self-workflow#readme",
   "bugs": {
     "url": "https://github.com/cherish-ltt/ghyper9023-self-workflow/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "repository": {
     "type": "git",
