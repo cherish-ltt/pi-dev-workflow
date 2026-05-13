@@ -28,6 +28,65 @@ function getAgent(
 	return agent;
 }
 
+/** Parse git-agent structured output into a clean summary. */
+interface GitSummary {
+	status: "success" | "fail" | "unknown";
+	summary: string;
+	details: string[];
+}
+
+function parseGitOutput(output: string): GitSummary {
+	const result: GitSummary = { status: "unknown", summary: "", details: [] };
+
+	// Parse <status>...</status>
+	const statusMatch = output.match(/<status>([^<]*)<\/status>/);
+	if (statusMatch) {
+		const s = statusMatch[1].trim();
+		if (s.includes("✅") || s.includes("✔")) result.status = "success";
+		else if (s.includes("❌") || s.includes("✖")) result.status = "fail";
+	}
+
+	// Parse <summary>...</summary>
+	const summaryMatch = output.match(/<summary>([\s\S]*?)<\/summary>/);
+	if (summaryMatch) result.summary = summaryMatch[1].trim();
+
+	// Parse <details>...</details> → extract each line
+	const detailsMatch = output.match(/<details>([\s\S]*?)<\/details>/);
+	if (detailsMatch) {
+		const lines = detailsMatch[1]
+			.split("\n")
+			.map((l) => l.replace(/^[-*]\s*/, "").trim())
+			.filter(Boolean);
+		result.details = lines;
+	}
+
+	// Fallback: if no structured format, use raw lines
+	if (!statusMatch && !summaryMatch) {
+		const lines = output.split("\n").filter((l) => l.trim());
+		result.summary = lines[0] || "";
+		result.details = lines.slice(1).map((l) => l.replace(/^[-*]\s*/, "").trim()).filter(Boolean);
+		// Infer status from content
+		if (output.includes("✅") || output.includes("success") || output.includes("完成")) {
+			result.status = "success";
+		} else if (output.includes("❌") || output.includes("fail") || output.includes("失败")) {
+			result.status = "fail";
+		}
+	}
+
+	return result;
+}
+
+/** Enrich a detail line with relevant emoji icons. */
+function iconify(line: string): string {
+	const lc = line.toLowerCase();
+	if (lc.startsWith("commit")) return `📝 ${line}`;
+	if (lc.startsWith("push"))   return `📤 ${line}`;
+	if (lc.includes("file") || lc.includes("文件")) return `📁 ${line}`;
+	if (lc.startsWith("branch") || lc.includes("branch")) return `🌿 ${line}`;
+	if (lc.startsWith("tag") || lc.includes("tag")) return `🏷️ ${line}`;
+	return `  ${line}`; // indent others
+}
+
 async function runSubAgent(
 	agent: AgentDef,
 	task: string,
@@ -68,30 +127,43 @@ async function runSubAgent(
 			}
 		}
 
+		ctx.ui.setStatus("subagent", undefined);
+
 		if (output) {
-			ctx.ui.setStatus("subagent", undefined);
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			ctx.ui.notify(`✅ git-sub-agent 完成 (耗时 ${dur}s)`, "success");
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			// Show a preview of output in notification
-			const preview = output.length > 300 ? output.slice(0, 300) + "..." : output;
-			ctx.ui.notify(preview, "info");
+			const parsed = parseGitOutput(output);
+			const statusIcon = parsed.status === "success" ? "✅" : parsed.status === "fail" ? "❌" : "ℹ️";
+
+			// Build standardized summary
+			const lines: string[] = [
+				`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+				`${statusIcon} git-sub-agent 完成 (${dur}s)`,
+				`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+			];
+			if (parsed.summary) lines.push(`  ${parsed.summary}`);
+			if (parsed.details.length > 0) {
+				lines.push("");
+				for (const d of parsed.details) {
+					lines.push(iconify(d));
+				}
+			}
+
+			const msg = lines.join("\n");
+			const notifyType = parsed.status === "fail" ? "error" : "success";
+			ctx.ui.notify(msg, notifyType);
 		} else if (result.exitCode !== 0) {
-			ctx.ui.setStatus("subagent", undefined);
 			const errMsg = result.stderr || result.output.slice(0, 1000) || "未知错误";
 			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
 			ctx.ui.notify(`❌ git-sub-agent 失败 (耗时 ${dur}s)\n${errMsg}`, "error");
 			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
 		} else {
-			ctx.ui.setStatus("subagent", undefined);
 			const rawPreview = result.output.slice(0, 300).trim();
 			if (rawPreview) {
 				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-				ctx.ui.notify(`✅ git-sub-agent 完成 (耗时 ${dur}s) — 原始输出:\n${rawPreview}`, "success");
+				ctx.ui.notify(`✅ git-sub-agent 完成 (${dur}s) — 原始输出:\n${rawPreview}`, "success");
 				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
 			} else {
 				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-				ctx.ui.notify(`✅ git-sub-agent 完成 (耗时 ${dur}s) — 无输出内容`, "success");
+				ctx.ui.notify(`✅ git-sub-agent 完成 (${dur}s) — 无输出内容`, "success");
 				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
 			}
 		}
