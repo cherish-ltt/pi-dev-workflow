@@ -3,16 +3,16 @@
   "version": "0.1.6",
   "keywords": ["pi-package"],
   "description": "Developer workflow toolkit for pi: git agents, code review, Karpathy guidelines, themes",
-  "homepage": "https://github.com/cherish-ltt/ghyper9023-pi-dev-workflow#readme",
+  "homepage": "https://github.com/cherish-ltt/pi-dev-workflow#readme",
   "bugs": {
-    "url": "https://github.com/cherish-ltt/ghyper9023-pi-dev-workflow/issues"
+    "url": "https://github.com/cherish-ltt/pi-dev-workflow/issues"
   },
   "publishConfig": {
     "access": "public"
   },
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/cherish-ltt/ghyper9023-pi-dev-workflow.git"
+    "url": "git+ssh://git@github.com/cherish-ltt/pi-dev-workflow.git"
   },
   "license": "MIT",
   "author": "ghyper9023",
