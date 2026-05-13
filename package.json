@@ -3,10 +3,36 @@
   "version": "0.1.6",
   "keywords": ["pi-package"],
   "description": "Developer workflow toolkit for pi: git agents, code review, Karpathy guidelines, themes",
+  "keywords": [
+    "pi-package"
+  ],
+  "homepage": "https://github.com/cherish-ltt/ghyper9023-self-workflow#readme",
+  "bugs": {
+    "url": "https://github.com/cherish-ltt/ghyper9023-self-workflow/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cherish-ltt/ghyper9023-self-workflow.git"
+  },
+  "license": "MIT",
+  "author": "ghyper9023",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "pi": {
-    "extensions": ["./extensions"],
-    "skills": ["./skills"],
-    "prompts": ["./prompts"],
-    "themes": ["./themes"]
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "themes": [
+      "./themes"
+    ]
   }
 }
