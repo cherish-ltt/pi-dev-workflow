@@ -19,7 +19,7 @@ pi-package/
 │   └── review-html/
 │       └── SKILL.md                 # 代码审查 → 输出交互式 HTML 报告
 ├── extensions/
-│   └── git-commands.ts              # /git-commit & /git-push 命令
+│   └── git-commands.ts              # /git-commit, /git-push, /git-commit-push 命令
 └── themes/                          # pi 主题（预留，暂无内容）
 ```
 
@@ -27,7 +27,7 @@ pi-package/
 
 | Extension | 说明 |
 |---|---|
-| **git-commands** | 注册两个命令：`/git-commit [message]` 暂存全部变更并提交；`/git-push` 推送至远程仓库（push 前会确认） |
+| **git-commands** | 注册三个命令：`/git-commit [message]` 暂存并提交(空信息让AI代写)；`/git-push` 推送(带确认)；`/git-commit-push [message]` 暂存+提交+推送一键完成 |
 
 ## Skills
 
