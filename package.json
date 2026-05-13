@@ -1,7 +1,9 @@
 {
   "name": "@ghyper9023/pi-dev-workflow",
-  "version": "0.1.6",
-  "keywords": ["pi-package"],
+  "version": "0.1.7",
+  "keywords": [
+    "pi-package"
+  ],
   "description": "Developer workflow toolkit for pi: git agents, code review, Karpathy guidelines, themes",
   "homepage": "https://github.com/cherish-ltt/pi-dev-workflow#readme",
   "bugs": {
