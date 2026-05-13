@@ -1,0 +1,9 @@
+# 生成产物
+pi-review/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
