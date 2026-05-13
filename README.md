@@ -1,6 +1,6 @@
 # ghyper9023-self-workflow
 
-> ghyper9023 自用 pi-package，为 [pi coding agent](https://github.com/earendil-works/pi-coding-agent) 提供个性化技能与提示词。
+> ghyper9023 自用 pi-package，为 [pi coding agent](https://pi.dev/) 提供个性化技能与提示词。
 
 ## 目录结构
 
@@ -10,15 +10,24 @@ pi-package/
 ├── README.md                        # 本文件
 ├── .gitignore
 ├── prompts/
-│   └── APPEND_SYSTEM.md             # 全局追加提示：强制使用简体中文+英文专业名词
+│   ├── APPEND_SYSTEM.md             # 全局追加提示：强制使用简体中文+英文专业名词
+│   ├── review-commit.md             # 审查 commit 的提示模板
+│   └── review-diff.md              # 审查 diff 的提示模板
 ├── skills/
 │   ├── karpathy-guidelines/
 │   │   └── SKILL.md                 # Karpathy 编码准则（避免 LLM 常见错误）
 │   └── review-html/
 │       └── SKILL.md                 # 代码审查 → 输出交互式 HTML 报告
-├── extensions/                      # pi 扩展（预留，暂无内容）
+├── extensions/
+│   └── git-commands.ts              # /git-commit & /git-push 命令
 └── themes/                          # pi 主题（预留，暂无内容）
 ```
+
+## Extensions
+
+| Extension | 说明 |
+|---|---|
+| **git-commands** | 注册两个命令：`/git-commit [message]` 暂存全部变更并提交；`/git-push` 推送至远程仓库（push 前会确认） |
 
 ## Skills
 

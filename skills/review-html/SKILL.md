@@ -1,4 +1,5 @@
 ---
+name: review-html
 description: review 代码并输出交互式 HTML 报告。适用于代码审查，git-diff评审。
 ---
 
