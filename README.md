@@ -1,6 +1,14 @@
 # ghyper9023-self-workflow
 
-> ghyper9023 自用 pi-package，为 [pi coding agent](https://pi.dev/) 提供个性化技能与提示词。
+> ghyper9023 自用 pi-package，为 [pi coding agent](https://pi.dev/) 提供个性化技能、提示词、扩展和主题。
+
+## 快速安装
+
+```bash
+pi install git:github.com/cherish-ltt/ghyper9023-self-workflow
+```
+
+然后 `/reload` 热加载即可使用所有功能。
 
 ## 目录结构
 
@@ -48,8 +56,16 @@ pi-package/
 
 ### review-sub-agent
 
-当用户输入包含 review/审查/审阅 + code/代码/diff/commit/html 等关键词时，自动委派 review-sub-agent 进行代码审查。
-审查完成后将结果返回给用户。
+当用户输入包含 review/审查/审阅 + code/代码/diff/commit/html 等关键词时，自动弹出三种模式选择：
+
+| # | 模式 | 行为 |
+|---|------|------|
+| **1** | 后台审查（非阻塞，异步通知） | 后台运行审查，不阻塞对话，完成后通过消息通知 |
+| **2** | 仅审查（阻塞，等待结果） | 等待审查完成才恢复交互 |
+| **3** / Esc | 不是审查（放行给主代理） | 不启动子代理，原消息交给主 AI 处理 |
+
+也支持 `/skill:review-html` 直接触发阻塞审查。
+审查结果以交互式 HTML 报告形式写入 `pi-review/` 目录。
 
 ### subagent 工具
 
@@ -74,10 +90,27 @@ LLM 也可以直接调用 `subagent` 工具委派任务给任意子代理：
 
 ## 使用方式
 
-1. 确保已安装 [pi coding agent](https://github.com/earendil-works/pi)
-2. 将本包放入 pi 的包目录或通过 `pi.config.yaml` 引用
-3. pi 会自动加载 `skills/`、`prompts/`、`extensions/`、`themes/` 下的内容
-4. `/reload` 热加载所有变更
+### 安装
+
+```bash
+# 通过 git 安装（推荐，自动更新）
+pi install git:github.com/cherish-ltt/ghyper9023-self-workflow
+
+# 或从本地目录安装
+pi install /path/to/ghyper9023-self-workflow
+```
+
+### 加载
+
+pi 会自动加载包内的 `skills/`、`prompts/`、`extensions/`、`themes/` 内容。
+安装后执行 `/reload` 热加载所有变更。
+
+### 包更新
+
+```bash
+pi install git:github.com/cherish-ltt/ghyper9023-self-workflow  # 重新安装以获取最新版本
+/reload
+```
 
 ## License
 
