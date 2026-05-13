@@ -17,16 +17,35 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       // Determine commit message
       let message = args.trim();
+
       if (!message) {
         const input = await ctx.ui.input("Commit message", {
-          placeholder: "Enter commit message...",
-          required: true,
+          placeholder: "直接回车让 AI 自动生成，或输入信息后提交...",
+          required: false,
         });
+        // Esc → cancel
         if (input === undefined) {
           ctx.ui.notify("Commit cancelled", "warning");
           return;
         }
-        message = input;
+        message = input.trim();
+      }
+
+      // No commit message provided → let AI write it
+      if (!message) {
+        ctx.ui.notify("🤖 正在让 AI 分析变更并生成 commit message...", "info");
+        pi.sendUserMessage(
+          `请帮我完成一次 git commit。
+
+要求：
+1. 先执行 \`git diff --cached\` 查看已暂存的变更，如果没有暂存内容则执行 \`git diff\` 查看工作区变更
+2. 使用 \`git add -A\` 暂存所有变更
+3. 根据变更内容，按照 Conventional Commits 规范生成标准的 commit message（如 \`feat:\`, \`fix:\`, \`refactor:\`, \`docs:\` 等）
+4. 用 \`git commit -m "<message>"\` 提交
+
+请直接执行，不要询问我确认。`,
+        );
+        return;
       }
 
       ctx.ui.setStatus("git", "🚧 Staging & committing...");
