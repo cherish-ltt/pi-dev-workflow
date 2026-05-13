@@ -6,7 +6,7 @@
  *
  * Provides:
  *   - subagent tool (for LLM to delegate tasks to agents like git-agent, review-agent)
- *   - review-agent input interception (auto-review when user mentions "review code")
+ *   - review-agent input interception with non‑blocking async mode
  *
  * Git commands (/git-commit, /git-push, /git-commit-push) are in git-commands.ts,
  * which imports spawnSubagent from here.
@@ -498,7 +498,7 @@ export default function (pi: ExtensionAPI) {
 		console.warn("[sub-agents] No agent markdown files found in package's agents/ directory");
 	}
 
-		// ── /subagent-stop — 主动终止所有正在运行的 sub-agent ──────
+	// ── /subagent-stop — 主动终止所有正在运行的 sub-agent ──────
 	pi.registerCommand("subagent-stop", {
 		description: "Terminate all running sub-agents immediately",
 		handler: async (_args, ctx) => {
@@ -566,8 +566,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// ── Review sub-agent (input interception) ─────────────────
-	// Fix #3: Better progress + completion feedback with duration.
-	// Fix #4: Longer timeout (300s), -nc/-ne flags, thinking=off.
+	// NON‑BLOCKING MODE: 用户可选择“后台审查”，不阻塞主对话，
+	// 审查完成后通过 sendMessage 自动将结果注入会话。
+	// 同时保留原有的阻塞模式供需要同步等待的场景使用。
 
 	pi.on("input", async (event, ctx) => {
 		if (!reviewAgent) return { action: "continue" };
@@ -586,81 +587,189 @@ export default function (pi: ExtensionAPI) {
 
 		if (!isReviewSkill && !isReviewRequest) return { action: "continue" };
 
-		// ── 自动触发（/skill:review-html）vs 询问确认 ──────
-		// 关键词触发时先询问用户，避免误拦截正常 prompt
-		if (!isReviewSkill) {
-			const ok = await ctx.ui.confirm(
-				"🔍 检测到审查意图",
-				"是否启动 review-sub-agent 审查代码？\n\n" +
-				"Enter = 审查  |  Esc = 作为普通任务处理",
+		// 自动触发 /skill:review-html 不询问，直接以“仅审查”模式运行（阻塞，不发送原消息）
+		if (isReviewSkill) {
+			ctx.ui.setStatus("subagent", "🔍 review-sub-agent reviewing...");
+			ctx.ui.notify("🤖 review-sub-agent 正在审查代码（最长 5 分钟），请稍候...", "info");
+
+			const result = await spawnSubagent(
+				reviewAgent,
+				event.text,
+				ctx.cwd,
+				ctx.signal,
+				undefined,
+				(progress) => {
+					ctx.ui.setStatus("subagent", progress.slice(0, 50));
+				},
 			);
-			if (!ok) {
-				// 用户选择不审查，放行给主 AI 正常处理
-				return { action: "continue" };
-			}
-		}
+			const dur = ((Date.now() - Date.now()) / 1000).toFixed(1); // fixed later
+			// 实际 dur 需要在结果后计算，上面临时占位；下面重新计算
+			const realDur = (result.durationMs / 1000).toFixed(1);
+			ctx.ui.setStatus("subagent", undefined);
 
-		const startTime = Date.now();
-		ctx.ui.setStatus("subagent", "🔍 review-sub-agent reviewing...");
-		ctx.ui.notify("🤖 review-sub-agent 正在审查代码（最长 5 分钟），请稍候...", "info");
-
-		// Use the user's original request directly
-		// The review-agent.md system prompt tells it to read the skill and write HTML to pi-review/
-		const task = event.text;
-
-		const result = await spawnSubagent(
-			reviewAgent,
-			task,
-			ctx.cwd,
-			ctx.signal,
-			undefined,
-			(progress) => {
-				ctx.ui.setStatus("subagent", progress.slice(0, 50));
-			},
-		);
-		const dur = ((Date.now() - startTime) / 1000).toFixed(1);
-
-		// Extract the subagent's structured summary output
-		let output = extractFinalOutput(result.output);
-		if (!output && result.output.trim()) {
-			const lines = result.output.split("\n").filter((l) => {
-				const t = l.trim();
-				return t && !t.startsWith("{") && !t.startsWith("[");
-			});
-			if (lines.length > 0) {
-				output = lines.join("\n").trim();
-			}
-		}
-
-		ctx.ui.setStatus("subagent", undefined);
-
-		// Scan pi-review/ for the newest HTML file (more reliable than parsing subagent stdout)
-		let filePath = "";
-		try {
-			const reviewDir = path.join(ctx.cwd, "pi-review");
-			if (fs.existsSync(reviewDir)) {
-				const files = fs.readdirSync(reviewDir)
-					.filter(f => f.endsWith(".html"))
-					.map(f => ({
-						name: f,
-						mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
-					}))
-					.sort((a, b) => b.mtime - a.mtime);
-				if (files.length > 0) {
-					filePath = "pi-review/" + files[0].name;
+			let filePath = "";
+			try {
+				const reviewDir = path.join(ctx.cwd, "pi-review");
+				if (fs.existsSync(reviewDir)) {
+					const files = fs.readdirSync(reviewDir)
+						.filter(f => f.endsWith(".html"))
+						.map(f => ({
+							name: f,
+							mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
+						}))
+						.sort((a, b) => b.mtime - a.mtime);
+					if (files.length > 0) {
+						filePath = "pi-review/" + files[0].name;
+					}
 				}
+			} catch {
+				// ignore fs errors
 			}
-		} catch {
-			// ignore fs errors
+
+			if (filePath) {
+				ctx.ui.notify(`📄 ${filePath} (${realDur}s)`, "success");
+			} else {
+				ctx.ui.notify(`✅ review-sub-agent 完成 (${realDur}s)`, "info");
+			}
+			return { action: "handled" };
 		}
 
-		if (filePath) {
-			ctx.ui.notify(`📄 ${filePath} (${dur}s)`, "success");
-		} else {
-			ctx.ui.notify(`✅ review-sub-agent 完成 (${dur}s)`, "info");
-		}
-		// Do NOT send user message — file already written to pi-review/, no need to trigger AI
+		// 对于普通关键词触发的审查请求，询问用户选择模式
+		const mode = await ctx.ui.select(
+			"🔍 检测到审查意图",
+			[
+				{ value: "block", label: "仅审查（阻塞，原消息不发给主代理）" },
+				{ value: "async", label: "后台审查（不阻塞，原消息继续由主代理处理）" },
+			],
+		);
 
-		return { action: "handled" };
+		if (!mode) {
+			// 用户取消，直接放行
+			return { action: "continue" };
+		}
+
+		if (mode === "block") {
+			// 原有阻塞模式：拦截原消息，只运行审查
+			ctx.ui.setStatus("subagent", "🔍 review-sub-agent reviewing...");
+			ctx.ui.notify("🤖 review-sub-agent 正在审查代码（最长 5 分钟），请稍候...", "info");
+
+			const result = await spawnSubagent(
+				reviewAgent,
+				event.text,
+				ctx.cwd,
+				ctx.signal,
+				undefined,
+				(progress) => {
+					ctx.ui.setStatus("subagent", progress.slice(0, 50));
+				},
+			);
+			const dur = (result.durationMs / 1000).toFixed(1);
+			ctx.ui.setStatus("subagent", undefined);
+
+			let filePath = "";
+			try {
+				const reviewDir = path.join(ctx.cwd, "pi-review");
+				if (fs.existsSync(reviewDir)) {
+					const files = fs.readdirSync(reviewDir)
+						.filter(f => f.endsWith(".html"))
+						.map(f => ({
+							name: f,
+							mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
+						}))
+						.sort((a, b) => b.mtime - a.mtime);
+					if (files.length > 0) {
+						filePath = "pi-review/" + files[0].name;
+					}
+				}
+			} catch {
+				// ignore fs errors
+			}
+
+			if (filePath) {
+				ctx.ui.notify(`📄 ${filePath} (${dur}s)`, "success");
+			} else {
+				ctx.ui.notify(`✅ review-sub-agent 完成 (${dur}s)`, "info");
+			}
+			return { action: "handled" };
+		}
+
+		// 非阻塞异步模式（async）
+		// 立即放行用户消息，让主代理继续处理；同时在后台运行审查，完成后通知
+		ctx.ui.notify("🔍 已在后台启动代码审查，完成后会在此对话中通知您。", "info");
+
+		// 注意：不能在 async 回调中直接使用 ctx，因为 ctx 可能已失效，
+		// 但我们可以使用闭包捕获的 pi 和必要参数。
+		const userTask = event.text;   // 原始用户输入
+		const cwd = ctx.cwd;
+		const abortSignal = ctx.signal; // 在后台任务中可能无效，但保留
+
+		// 启动后台任务（不等待）
+		(async () => {
+			try {
+				const startTime = Date.now();
+				const result = await spawnSubagent(
+					reviewAgent,
+					userTask,
+					cwd,
+					abortSignal,
+					undefined,
+					(progress) => {
+						// 后台进度可以通过 setStatus 显示，但可能会与其他扩展冲突
+						// 这里简单忽略，或者可以用 pi 的 setStatus 但需要会话上下文
+						// 考虑到跨会话问题，我们不在后台任务中频繁调用 ui 方法。
+					},
+				);
+				const dur = ((Date.now() - startTime) / 1000).toFixed(1);
+
+				// 生成报告文件路径
+				let filePath = "";
+				try {
+					const reviewDir = path.join(cwd, "pi-review");
+					if (fs.existsSync(reviewDir)) {
+						const files = fs.readdirSync(reviewDir)
+							.filter(f => f.endsWith(".html"))
+							.map(f => ({
+								name: f,
+								mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
+							}))
+							.sort((a, b) => b.mtime - a.mtime);
+						if (files.length > 0) {
+							filePath = "pi-review/" + files[0].name;
+						}
+					}
+				} catch {
+					// ignore fs errors
+				}
+
+				// 将结果作为自定义消息注入当前会话
+				if (filePath) {
+					pi.sendMessage({
+						customType: "review-result",
+						content: `🔍 **代码审查完成** (耗时 ${dur}s)\n\n报告已生成：\n\`${filePath}\`\n\n您可以打开该文件查看详细审查意见。`,
+						display: true,
+						details: { filePath, durationMs: result.durationMs },
+					});
+				} else {
+					// 没有找到 HTML 文件，尝试输出摘要
+					const output = extractFinalOutput(result.output) || result.stderr || "无输出";
+					pi.sendMessage({
+						customType: "review-result",
+						content: `🔍 **代码审查完成** (耗时 ${dur}s)\n\n\`\`\`\n${output.slice(0, 2000)}${output.length > 2000 ? "\n...(内容已截断)" : ""}\n\`\`\``,
+						display: true,
+						details: { durationMs: result.durationMs },
+					});
+				}
+			} catch (err) {
+				console.error("[sub-agents] Background review failed:", err);
+				pi.sendMessage({
+					customType: "review-result",
+					content: `❌ 后台代码审查失败：${err instanceof Error ? err.message : String(err)}`,
+					display: true,
+				});
+			}
+		})();  // 异步执行，不等待
+
+		// 立即返回 continue，让用户消息正常进入主对话
+		return { action: "continue" };
 	});
 }
