@@ -643,8 +643,8 @@ export default function (pi: ExtensionAPI) {
 		const mode = await ctx.ui.select(
 			"🔍 检测到审查意图",
 			[
-				"1. 仅审查(阻塞,等待结果)",
-				"2. 后台审查(非阻塞,异步通知)",
+				"1. 后台审查(非阻塞,异步通知)",
+				"2. 仅审查(阻塞,等待结果)",
 				"3. 不是审查(放行给主代理)",
 			],
 		);
@@ -654,7 +654,7 @@ export default function (pi: ExtensionAPI) {
 			return { action: "continue" };
 		}
 
-		const isAsync = mode.startsWith("2");
+		const isAsync = mode.startsWith("1");
 
 		if (!isAsync) {
 			// 阻塞模式:拦截原消息,同步等待审查完成
