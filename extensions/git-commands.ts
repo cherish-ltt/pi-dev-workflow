@@ -132,40 +132,15 @@ async function runSubAgent(
 		if (output) {
 			const parsed = parseGitOutput(output);
 			const statusIcon = parsed.status === "success" ? "✅" : parsed.status === "fail" ? "❌" : "ℹ️";
-
-			// Build standardized summary
-			const lines: string[] = [
-				`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-				`${statusIcon} git-sub-agent 完成 (${dur}s)`,
-				`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-			];
-			if (parsed.summary) lines.push(`  ${parsed.summary}`);
-			if (parsed.details.length > 0) {
-				lines.push("");
-				for (const d of parsed.details) {
-					lines.push(iconify(d));
-				}
-			}
-
-			const msg = lines.join("\n");
+			const detailText = parsed.details.length > 0 ? ` | ${parsed.details.join(" | ")}` : "";
+			const msg = `${statusIcon} ${parsed.summary || "done"} (${dur}s)${detailText}`;
 			const notifyType = parsed.status === "fail" ? "error" : "success";
 			ctx.ui.notify(msg, notifyType);
 		} else if (result.exitCode !== 0) {
-			const errMsg = result.stderr || result.output.slice(0, 1000) || "未知错误";
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
-			ctx.ui.notify(`❌ git-sub-agent 失败 (耗时 ${dur}s)\n${errMsg}`, "error");
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
+			const errMsg = result.stderr || result.output.slice(0, 300) || "未知错误";
+			ctx.ui.notify(`❌ git-sub-agent 失败 (${dur}s): ${errMsg}`, "error");
 		} else {
-			const rawPreview = result.output.slice(0, 300).trim();
-			if (rawPreview) {
-				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-				ctx.ui.notify(`✅ git-sub-agent 完成 (${dur}s) — 原始输出:\n${rawPreview}`, "success");
-				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			} else {
-				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-				ctx.ui.notify(`✅ git-sub-agent 完成 (${dur}s) — 无输出内容`, "success");
-				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			}
+			ctx.ui.notify(`✅ git-sub-agent 完成 (${dur}s)`, "success");
 		}
 	} finally {
 		ctx.ui.setStatus("subagent", undefined);
