@@ -33,7 +33,7 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 const PROGRESS_INTERVAL_MS = 1_500;
 
 /** Hard limit on accumulated output per subagent (prevents OOM on runaway). */
-const MAX_BUFFER_BYTES = 200_000;
+const MAX_BUFFER_BYTES = 500_000;
 
 /** Locations to auto-load APPEND_SYSTEM.md / append.system.md from (checked in order). */
 const APPEND_SYSTEM_PATHS = [
@@ -406,7 +406,22 @@ export function extractFinalOutput(jsonOutput: string): string {
 		try {
 			const event = JSON.parse(line);
 
-			// Format 1: Anthropic-style message events
+			// Format 1: pi's --mode json message_update with text_delta (streaming)
+			//   {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"..."}}
+			if (event.type === "message_update" &&
+			    event.assistantMessageEvent?.type === "text_delta") {
+				result += event.assistantMessageEvent.delta || "";
+			}
+
+			// Format 1b: text_end has the complete accumulated text
+			//   {"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"..."}}
+			if (event.type === "message_update" &&
+			    event.assistantMessageEvent?.type === "text_end" &&
+			    event.assistantMessageEvent.content) {
+				result = event.assistantMessageEvent.content;
+			}
+
+			// Format 2: Anthropic-style message events
 			// message_stop / message_end with content array
 			if ((event.type === "message_stop" || event.type === "message_end" ||
 			     event.type === "message_complete") &&
@@ -420,7 +435,7 @@ export function extractFinalOutput(jsonOutput: string): string {
 				}
 			}
 
-			// Format 2: content_block_delta with text deltas (streaming)
+			// Format 3: content_block_delta with text deltas (fallback format)
 			if (event.type === "content_block_delta" &&
 			    event.delta?.type === "text_delta") {
 				result += event.delta.text;
@@ -430,14 +445,14 @@ export function extractFinalOutput(jsonOutput: string): string {
 				result += event.delta.text;
 			}
 
-			// Format 3: generic assistant response
+			// Format 4: generic assistant response
 			if (event.type === "assistant_message" && event.content) {
 				result = typeof event.content === "string"
 					? event.content
 					: (event.content.text || event.content.join?.(""));
 			}
 
-			// Format 4: text key at top level
+			// Format 5: text key at top level
 			if (event.type === "complete" && event.text) {
 				result = event.text;
 			}
@@ -589,27 +604,25 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus("subagent", "🔍 review-sub-agent reviewing...");
 		ctx.ui.notify("🤖 review-sub-agent 正在审查代码（最长 5 分钟），请稍候...", "info");
 
-		// Use the user's original request directly (avoids prepending redundant text)
-		// The review-agent.md system prompt already instructs on using git diff, etc.
+		// Use the user's original request directly
+		// The review-agent.md system prompt tells it to read the skill and write HTML to pi-review/
 		const task = event.text;
 
-		// Fix #3: Progress streaming with elapsed time
 		const result = await spawnSubagent(
 			reviewAgent,
 			task,
 			ctx.cwd,
 			ctx.signal,
-			undefined, // uses agent's default (300s for review)
+			undefined,
 			(progress) => {
 				ctx.ui.setStatus("subagent", progress.slice(0, 50));
 			},
 		);
 		const dur = ((Date.now() - startTime) / 1000).toFixed(1);
 
-		// Extract output with fallback to raw stdout
+		// Extract the subagent's structured summary output
 		let output = extractFinalOutput(result.output);
 		if (!output && result.output.trim()) {
-			// Fallback: extract non-JSON lines from raw stdout
 			const lines = result.output.split("\n").filter((l) => {
 				const t = l.trim();
 				return t && !t.startsWith("{") && !t.startsWith("[");
@@ -619,35 +632,17 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
+		ctx.ui.setStatus("subagent", undefined);
+		ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+		ctx.ui.notify(`✅ review-sub-agent 完成 (耗时 ${dur}s)`, "success");
+		ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+
 		if (output) {
-			ctx.ui.setStatus("subagent", undefined);
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			ctx.ui.notify(`✅ review-sub-agent 完成 (耗时 ${dur}s)`, "success");
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			// Truncate very long output for the chat message
-			const displayOutput = output.length > 8000
-				? output.slice(0, 8000) + "\n\n... (输出过长已截断)"
-				: output;
-			pi.sendUserMessage(`## ✅ Review-sub-agent 审查报告 (${dur}s)\n\n${displayOutput}`);
-		} else if (result.exitCode !== 0) {
-			ctx.ui.setStatus("subagent", undefined);
-			const errMsg = result.stderr || result.output.slice(0, 1000) || "未知错误";
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
-			ctx.ui.notify(`❌ review-sub-agent 失败 (耗时 ${dur}s)\n${errMsg}`, "error");
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
-		} else {
-			// output is empty but exitCode === 0
-			ctx.ui.setStatus("subagent", undefined);
-			const rawPreview = result.output.slice(0, 500).trim();
-			if (rawPreview) {
-				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-				ctx.ui.notify(`✅ review-sub-agent 完成 (耗时 ${dur}s) — 原始输出:\n${rawPreview}`, "success");
-				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			} else {
-				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-				ctx.ui.notify(`✅ review-sub-agent 完成 (耗时 ${dur}s) — 无输出内容`, "success");
-				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			}
+			// Subagent now outputs structured summary (<status>/<summary>/<details>) like git-agent
+			// This is short enough to send as a user message
+			pi.sendUserMessage(`## ✅ Review-sub-agent 审查报告 (${dur}s)\n\n${output}`);
+		} else if (result.stderr) {
+			pi.sendUserMessage(`## ⚠️ Review-sub-agent 报告 (${dur}s)\n\nstderr:\n\`\`\`\n${result.stderr.slice(0, 2000)}\n\`\`\``);
 		}
 
 		return { action: "handled" };
