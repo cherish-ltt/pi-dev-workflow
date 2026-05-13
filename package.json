@@ -1,6 +1,6 @@
 {
   "name": "ghyper9023-self-workflow",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "keywords": ["pi-package"],
   "description": "ghyper9023自用pi-package",
   "pi": {
