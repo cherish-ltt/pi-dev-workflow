@@ -34,6 +34,8 @@ pi-package/
 │   └── review-html/
 │       └── SKILL.md                 # 代码审查 → 输出交互式 HTML 报告
 ├── extensions/
+│   ├── dev-prompts.ts               # 提示词优化向导（/dev-* 命令）
+│   ├── git-commands.ts              # git-sub-agent 命令
 │   └── sub-agents.ts                # 子代理系统：git-sub-agent + review-sub-agent
 └── themes/
     └── claude-code-theme.json       # Claude Code CLI 风格主题
@@ -84,6 +86,75 @@ LLM 也可以直接调用 `subagent` 工具委派任务给任意子代理：
 | Theme | 说明 |
 |---|---|
 | **claude-code-theme** | 仿 Claude Code CLI 配色：深色底 + 琥珀金主色 + 紫罗兰辅色 |
+
+## Dev Prompts（提示词优化向导）
+
+基于 [ai提示词优化.md](./ai%E6%8F%90%E7%A4%BA%E8%AF%8D%E4%BC%98%E5%8C%96.md) 中的优质模板，通过交互式问答引导你填写 `[xxx]` 占位符，组装完整的高质量提示词后直接投递给主代理执行。
+
+### 命令一览
+
+| 命令 | 用途 | 对应模板类型 |
+|---|---|---|
+| `/dev-feat` | 新功能/创意生成 | `feat` |
+| `/dev-fix` | 问题排查/错误修正 | `fix` |
+| `/dev-doc` | 文档生成/总结 | `doc` |
+| `/dev-refactor` | 重构/优化现有结构 | `refactor` |
+| `/dev-test` | 测试用例生成 | `test` |
+| `/dev-chore` | 日常维护/自动化 | `chore` |
+| `/dev-perf` | 性能优化 | `perf` |
+| `/dev-style` | 风格/格式调整 | `style` |
+| `/dev-security` | 安全审查 | `security` |
+| `/dev-explain` | 概念解释 | `explain` |
+| `/dev-compare` | 对比评估 | `compare` |
+
+### 使用方法
+
+输入任意 `/dev-*` 命令进入向导，按提示逐项填写字段：
+
+```text
+# 示例：/dev-feat
+📋 /dev-feat — 新功能/创意生成，请逐项填写以下信息（留空跳过对应段落，Esc 取消）
+
+编程语言/框架？ TypeScript
+技术栈？ NestJS + Prisma
+目标模块/文件名？ src/auth/login.ts
+核心功能描述？ 用户可以通过邮箱+密码注册并登录
+...
+✅ 提示词已组装完成，正在发送给主代理...
+```
+
+**交互规则**：
+- **留空（直接回车）** — 该字段标记为「无」，对应的模板段落整段跳过
+- **输入「无」** — 与留空效果相同，明确表示不需要该段内容
+- **按 Esc** — 随时退出向导，不产生任何输出
+- **填写后** — 自动用 `pi.sendUserMessage()` 投递给主代理，立即开始执行
+
+### 示例 1：用 `/dev-fix` 修 Bug
+
+```text
+/dev-fix
+文件路径？ src/api/users.ts
+行号？ 42
+Bug 描述？ 创建用户成功后返回 201，但实际上返回了 500
+输入/现象？ POST /api/users 正确参数返回 Internal Server Error
+预期行为？ 返回 201 + 用户数据
+当前错误？ 500 Internal Server Error
+```
+
+组装后的提示词包含：根因诊断 → 修复方案 → 测试复现 → diff 输出。
+
+### 示例 2：用 `/dev-doc` 写文档
+
+```text
+/dev-doc
+模块/API 名称？ AuthService REST API
+目标受众？ 前端开发者和后端集成方
+关键信息点？ 注册、登录、刷新 token、登出四个接口的用法
+示例语言？ TypeScript, curl
+已有材料？ （留空跳过，从零生成）
+```
+
+组装后的提示词包含：角色（技术文档工程师）→ 大纲先行 → Markdown 层级文档 → 2 个可运行示例。
 
 ## Skills
 
