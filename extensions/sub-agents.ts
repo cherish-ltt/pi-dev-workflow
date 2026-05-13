@@ -633,17 +633,33 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		ctx.ui.setStatus("subagent", undefined);
-		ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-		ctx.ui.notify(`✅ review-sub-agent 完成 (耗时 ${dur}s)`, "success");
-		ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
 
-		if (output) {
-			// Subagent now outputs structured summary (<status>/<summary>/<details>) like git-agent
-			// This is short enough to send as a user message
-			pi.sendUserMessage(`## ✅ Review-sub-agent 审查报告 (${dur}s)\n\n${output}`);
-		} else if (result.stderr) {
-			pi.sendUserMessage(`## ⚠️ Review-sub-agent 报告 (${dur}s)\n\nstderr:\n\`\`\`\n${result.stderr.slice(0, 2000)}\n\`\`\``);
+		// Scan pi-review/ for the newest HTML file (more reliable than parsing subagent stdout)
+		let filePath = "";
+		try {
+			const reviewDir = path.join(ctx.cwd, "pi-review");
+			if (fs.existsSync(reviewDir)) {
+				const files = fs.readdirSync(reviewDir)
+					.filter(f => f.endsWith(".html"))
+					.map(f => ({
+						name: f,
+						mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
+					}))
+					.sort((a, b) => b.mtime - a.mtime);
+				if (files.length > 0) {
+					filePath = "pi-review/" + files[0].name;
+				}
+			}
+		} catch {
+			// ignore fs errors
 		}
+
+		if (filePath) {
+			ctx.ui.notify(`📄 ${filePath} (${dur}s)`, "success");
+		} else {
+			ctx.ui.notify(`✅ review-sub-agent 完成 (${dur}s)`, "info");
+		}
+		// Do NOT send user message — file already written to pi-review/, no need to trigger AI
 
 		return { action: "handled" };
 	});
