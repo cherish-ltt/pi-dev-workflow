@@ -16,7 +16,11 @@ import { discoverAgents, spawnSubagent, extractFinalOutput, type AgentDef } from
 
 // ── Helpers ──────────────────────────────────────────────────
 
-function getAgent(ctx: { ui: { notify: (msg: string, type: string) => void } }, agent: AgentDef | undefined, name: string): AgentDef | null {
+function getAgent(
+	ctx: { ui: { notify: (msg: string, type: string) => void } },
+	agent: AgentDef | undefined,
+	name: string,
+): AgentDef | null {
 	if (!agent) {
 		ctx.ui.notify(`❌ ${name} not found (check agents/${name}.md)`, "error");
 		return null;
@@ -27,20 +31,69 @@ function getAgent(ctx: { ui: { notify: (msg: string, type: string) => void } }, 
 async function runSubAgent(
 	agent: AgentDef,
 	task: string,
-	ctx: { cwd: string; signal?: AbortSignal; ui: { setStatus: (key: string, status: string | undefined) => void; notify: (msg: string, type: string) => void } },
+	ctx: {
+		cwd: string;
+		signal?: AbortSignal;
+		ui: {
+			setStatus: (key: string, status: string | undefined) => void;
+			notify: (msg: string, type: string) => void;
+		};
+	},
 ): Promise<void> {
+	const startTime = Date.now();
 	ctx.ui.setStatus("subagent", "🤖 git-sub-agent working...");
 
 	try {
-		const result = await spawnSubagent(agent, task, ctx.cwd, ctx.signal);
-		const output = extractFinalOutput(result.output);
+		const result = await spawnSubagent(
+			agent,
+			task,
+			ctx.cwd,
+			ctx.signal,
+			undefined, // use agent's default timeout
+			(progress) => {
+				ctx.ui.setStatus("subagent", progress.slice(0, 50));
+			},
+		);
+		const dur = ((Date.now() - startTime) / 1000).toFixed(1);
+
+		// Extract output with fallback to raw stdout
+		let output = extractFinalOutput(result.output);
+		if (!output && result.output.trim()) {
+			const lines = result.output.split("\n").filter((l) => {
+				const t = l.trim();
+				return t && !t.startsWith("{") && !t.startsWith("[");
+			});
+			if (lines.length > 0) {
+				output = lines.join("\n").trim();
+			}
+		}
 
 		if (output) {
-			ctx.ui.notify(`✅ git-sub-agent done\n${output}`, "success");
+			ctx.ui.setStatus("subagent", undefined);
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			ctx.ui.notify(`✅ git-sub-agent 完成 (耗时 ${dur}s)`, "success");
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			// Show a preview of output in notification
+			const preview = output.length > 300 ? output.slice(0, 300) + "..." : output;
+			ctx.ui.notify(preview, "info");
 		} else if (result.exitCode !== 0) {
-			ctx.ui.notify(`❌ git-sub-agent failed:\n${result.stderr}`, "error");
+			ctx.ui.setStatus("subagent", undefined);
+			const errMsg = result.stderr || result.output.slice(0, 1000) || "未知错误";
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
+			ctx.ui.notify(`❌ git-sub-agent 失败 (耗时 ${dur}s)\n${errMsg}`, "error");
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
 		} else {
-			ctx.ui.notify("✅ git-sub-agent completed (no output)", "success");
+			ctx.ui.setStatus("subagent", undefined);
+			const rawPreview = result.output.slice(0, 300).trim();
+			if (rawPreview) {
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+				ctx.ui.notify(`✅ git-sub-agent 完成 (耗时 ${dur}s) — 原始输出:\n${rawPreview}`, "success");
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			} else {
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+				ctx.ui.notify(`✅ git-sub-agent 完成 (耗时 ${dur}s) — 无输出内容`, "success");
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			}
 		}
 	} finally {
 		ctx.ui.setStatus("subagent", undefined);
@@ -91,7 +144,11 @@ export default function (pi: ExtensionAPI) {
 			if (!agent) return;
 
 			ctx.ui.notify("🤖 正在委派 git-sub-agent 处理...", "info");
-			await runSubAgent(agent, "Push commits to remote with git push. Do NOT ask for confirmation.", ctx);
+			await runSubAgent(
+				agent,
+				"Push commits to remote with git push. Do NOT ask for confirmation.",
+				ctx,
+			);
 		},
 	});
 

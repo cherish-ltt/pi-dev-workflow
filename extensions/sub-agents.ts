@@ -20,14 +20,56 @@ import { Type } from "typebox";
 
 // ── Configuration ────────────────────────────────────────────
 
-/** Default timeout for subagent processes (milliseconds). */
-const SUBAGENT_TIMEOUT_MS = 120_000;
+/** Default timeout for git-type subagents (milliseconds). */
+const GIT_TIMEOUT_MS = 120_000;
+
+/** Default timeout for review-type subagents (longer = needs more time). */
+const REVIEW_TIMEOUT_MS = 300_000; // 5 min
+
+/** Fallback default. */
+const DEFAULT_TIMEOUT_MS = 180_000;
 
 /** Report sub-agent progress every N ms. */
-const PROGRESS_INTERVAL_MS = 5_000;
+const PROGRESS_INTERVAL_MS = 1_500;
 
 /** Hard limit on accumulated output per subagent (prevents OOM on runaway). */
 const MAX_BUFFER_BYTES = 200_000;
+
+/** Locations to auto-load APPEND_SYSTEM.md / append.system.md from (checked in order). */
+const APPEND_SYSTEM_PATHS = [
+	path.join(osHomedir(), ".pi", "agent", "append.system.md"),
+	".pi/append.system.md",
+	"APPEND_SYSTEM.md",
+];
+
+// Lazily resolved
+let _appendSystemContent: string | null | undefined; // undefined = not checked yet
+
+function loadAppendSystem(cwd: string): string | null {
+	if (_appendSystemContent !== undefined) return _appendSystemContent;
+	for (const loc of APPEND_SYSTEM_PATHS) {
+		const abs = path.isAbsolute(loc) ? loc : path.join(cwd, loc);
+		try {
+			const content = fs.readFileSync(abs, "utf-8").trim();
+			if (content) {
+				_appendSystemContent = content;
+				return content;
+			}
+		} catch {
+			// file not found or unreadable, try next
+		}
+	}
+	_appendSystemContent = null;
+	return null;
+}
+
+function osHomedir(): string {
+	try {
+		return require("node:os").homedir();
+	} catch {
+		return process.env.HOME || process.env.USERPROFILE || "/root";
+	}
+}
 
 // ── Process lifecycle management ─────────────────────────────
 //
@@ -40,7 +82,6 @@ const MAX_BUFFER_BYTES = 200_000;
 // Fix #2: CPU spike / deadlock mitigation
 //   - Hard buffer size limit (MAX_BUFFER_BYTES) to cap memory
 //   - Simplified settle() — no listener remove/reattach race
-//   - Simpler interval/progress handling
 
 const activeChildren = new Set<import("node:child_process").ChildProcess>();
 
@@ -86,12 +127,23 @@ export interface AgentDef {
 	description: string;
 	tools?: string[];
 	systemPrompt: string;
+	/** Custom timeout in ms for this agent type. */
+	timeoutMs?: number;
 }
 
 export interface SubagentResult {
 	exitCode: number;
 	output: string;
 	stderr: string;
+	/** How long the subagent ran (ms). */
+	durationMs: number;
+}
+
+function inferTimeout(name: string): number {
+	const lc = name.toLowerCase();
+	if (lc.includes("review") || lc.includes("审查")) return REVIEW_TIMEOUT_MS;
+	if (lc.includes("git")) return GIT_TIMEOUT_MS;
+	return DEFAULT_TIMEOUT_MS;
 }
 
 function loadAgent(filePath: string): AgentDef | null {
@@ -117,27 +169,11 @@ function loadAgent(filePath: string): AgentDef | null {
 			description: fields.description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			systemPrompt: body,
+			timeoutMs: inferTimeout(fields.name),
 		};
 	} catch {
 		return null;
 	}
-}
-
-let _agentsDir: string | null = null;
-
-function findPackageAgentsDir(): string | null {
-	// Walk up from __dirname to find the package root with agents/
-	let dir = __dirname;
-	for (let i = 0; i < 10; i++) {
-		const candidate = path.join(dir, "agents");
-		if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-			return candidate;
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
-	return null;
 }
 
 let _discoveredAgents: AgentDef[] | null = null;
@@ -145,8 +181,19 @@ let _discoveredAgents: AgentDef[] | null = null;
 export function discoverAgents(): AgentDef[] {
 	if (_discoveredAgents) return _discoveredAgents;
 
-	const agentsDir = findPackageAgentsDir();
-	_agentsDir = agentsDir;
+	// Walk up from __dirname to find the package root with agents/
+	let dir = __dirname;
+	let agentsDir: string | null = null;
+	for (let i = 0; i < 10; i++) {
+		const candidate = path.join(dir, "agents");
+		if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+			agentsDir = candidate;
+			break;
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
 	if (!agentsDir) return (_discoveredAgents = []);
 
 	const agents: AgentDef[] = [];
@@ -170,7 +217,9 @@ export function discoverAgents(): AgentDef[] {
 // ── Spawn subagent process ───────────────────────────────────
 // Fix #2: Simplified settle logic — no listener manipulation races.
 //   Buffer is capped at MAX_BUFFER_BYTES to prevent OOM on runaway output.
-// Fix #3: onProgress callback streams sub-agent output periodically.
+// Fix #3: onProgress callback streams sub-agent output in real-time.
+// Fix #4: -nc (no context files), -ne (no extensions) to reduce startup overhead.
+//   Auto-load append.system.md. Thinking=off for faster responses.
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	const currentScript = process.argv[1];
@@ -191,15 +240,50 @@ export async function spawnSubagent(
 	task: string,
 	cwd: string,
 	signal?: AbortSignal,
-	timeoutMs: number = SUBAGENT_TIMEOUT_MS,
+	timeoutMs?: number,
 	onProgress?: (msg: string) => void,
 ): Promise<SubagentResult> {
+	const effectiveTimeout = timeoutMs ?? agent.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const systemPrompt = agent.systemPrompt.trim();
 
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
-	if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
+	// Build pi arguments for the subagent
+	const args: string[] = [
+		"-p",                        // non-interactive
+		"--no-session",              // ephemeral
+		"-nc",                       // no context files (AGENTS.md / CLAUDE.md)
+		"-ne",                       // no extensions (less startup overhead)
+		"--mode", "json",            // structured output
+	];
+
+	// Sub-agents don't need high thinking — off for speed
+	// (system prompt + task text provides enough context)
+	args.push("--thinking", "off");
+
+	// Only grant the tools the agent needs
+	if (agent.tools && agent.tools.length > 0) {
+		args.push("--tools", agent.tools.join(","));
+	}
+
+	// Append agent system prompt
+	if (systemPrompt) {
+		args.push("--append-system-prompt", systemPrompt);
+	}
+
+	// Auto-load append.system.md (global or project-level)
+	// Fix #3: Sub-agents now follow append.system.md instructions
+	try {
+		const appendContent = loadAppendSystem(cwd);
+		if (appendContent) {
+			args.push("--append-system-prompt", appendContent);
+		}
+	} catch {
+		// fail silently
+	}
+
+	// The task itself
 	args.push(task);
+
+	const startTime = Date.now();
 
 	return new Promise((resolve) => {
 		const invocation = getPiInvocation(args);
@@ -218,14 +302,17 @@ export async function spawnSubagent(
 		let stderr = "";
 		let settled = false;
 
-		// ── Periodic progress reporting ────────────────────────
-		// Fix #3: Show recent sub-agent output to the user
+		// ── Real-time progress reporting ───────────────────────
+		// Fix #3: More frequent updates (every 1.5s) + on every data chunk
 		const progressTimer = setInterval(() => {
 			if (settled || !onProgress) return;
+			const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 			const lines = stdout.split("\n").filter((l) => l.trim());
 			if (lines.length > 0) {
 				const recent = lines.slice(-3).join("\n");
-				onProgress(`[${agent.name}] ${recent.slice(0, 200)}`);
+				onProgress(`[${agent.name}] (${elapsed}s) ${recent.slice(0, 200)}`);
+			} else {
+				onProgress(`[${agent.name}] (${elapsed}s) ⏳ 处理中...`);
 			}
 		}, PROGRESS_INTERVAL_MS);
 		if (typeof progressTimer === "object" && "unref" in progressTimer) {
@@ -236,15 +323,26 @@ export async function spawnSubagent(
 			if (settled) return;
 			settled = true;
 			clearInterval(progressTimer);
+			result.durationMs = Date.now() - startTime;
 			resolve(result);
 		};
 
+		// ── Stream stdout data + immediate progress callback ──
+		// Fix #3: Flush progress on every data chunk
 		proc.stdout.on("data", (data: Buffer) => {
 			const chunk = data.toString();
 			if (stdout.length < MAX_BUFFER_BYTES) {
 				stdout += chunk;
 				if (stdout.length > MAX_BUFFER_BYTES) {
 					stdout = stdout.slice(0, MAX_BUFFER_BYTES);
+				}
+			}
+			// Immediate progress on new data
+			if (!settled && onProgress) {
+				const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+				const lines = chunk.split("\n").filter((l) => l.trim());
+				if (lines.length > 0) {
+					onProgress(`[${agent.name}] (${elapsed}s) ${lines.slice(-1)[0].slice(0, 150)}`);
 				}
 			}
 		});
@@ -260,15 +358,16 @@ export async function spawnSubagent(
 		});
 
 		proc.on("close", (code) => {
-			settle({ exitCode: code ?? 0, output: stdout, stderr });
+			settle({ exitCode: code ?? 0, output: stdout, stderr, durationMs: 0 });
 		});
 		proc.on("error", () => {
-			settle({ exitCode: 1, output: "", stderr: "Failed to spawn subagent process" });
+			settle({ exitCode: 1, output: "", stderr: "Failed to spawn subagent process", durationMs: 0 });
 		});
 
 		// ── Timeout protection ──────────────────────────────
 		const timer = setTimeout(() => {
 			if (settled) return;
+			const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 			try { proc.kill("SIGTERM"); } catch { /* already dead */ }
 			// Give it a moment to terminate gracefully, then force kill
 			setTimeout(() => {
@@ -277,9 +376,10 @@ export async function spawnSubagent(
 			settle({
 				exitCode: -1,
 				output: stdout,
-				stderr: stderr + "\n[ERROR] Subagent timed out after " + (timeoutMs / 1000) + "s",
+				stderr: stderr + `\n[ERROR] Subagent timed out after ${(effectiveTimeout / 1000).toFixed(0)}s (${elapsed}s elapsed)`,
+				durationMs: 0,
 			});
-		}, timeoutMs);
+		}, effectiveTimeout);
 		if (typeof timer === "object" && "unref" in timer) timer.unref();
 
 		// ── Abort signal wiring ─────────────────────────────
@@ -297,22 +397,79 @@ export async function spawnSubagent(
 }
 
 export function extractFinalOutput(jsonOutput: string): string {
-	// Parse JSON lines from --mode json output, find last assistant message
-	let lastAssistantText = "";
+	// Parse JSON lines from --mode json output
+	// Try multiple event formats to find the final assistant response
+	let result = "";
+
 	for (const line of jsonOutput.split("\n")) {
 		if (!line.trim()) continue;
 		try {
 			const event = JSON.parse(line);
-			if (event.type === "message_end" && event.message?.role === "assistant") {
-				for (const part of event.message.content || []) {
-					if (part.type === "text") lastAssistantText = part.text;
+
+			// Format 1: Anthropic-style message events
+			// message_stop / message_end with content array
+			if ((event.type === "message_stop" || event.type === "message_end" ||
+			     event.type === "message_complete") &&
+			    event.message?.content) {
+				const parts = Array.isArray(event.message.content)
+					? event.message.content
+					: [event.message.content];
+				for (const part of parts) {
+					if (typeof part === "string") result = part;
+					else if (part?.type === "text") result = part.text;
 				}
 			}
+
+			// Format 2: content_block_delta with text deltas (streaming)
+			if (event.type === "content_block_delta" &&
+			    event.delta?.type === "text_delta") {
+				result += event.delta.text;
+			}
+			if (event.type === "content_block_delta" &&
+			    event.delta?.text) {
+				result += event.delta.text;
+			}
+
+			// Format 3: generic assistant response
+			if (event.type === "assistant_message" && event.content) {
+				result = typeof event.content === "string"
+					? event.content
+					: (event.content.text || event.content.join?.(""));
+			}
+
+			// Format 4: text key at top level
+			if (event.type === "complete" && event.text) {
+				result = event.text;
+			}
 		} catch {
-			// skip malformed lines
+			// If a line isn't JSON, it might be raw text output — collect it
+			if (!result) {
+				const trimmed = line.trim();
+				if (trimmed && !trimmed.startsWith("{") && trimmed.length > 20) {
+					result = (result + "\n" + trimmed).trim();
+				}
+			}
 		}
 	}
-	return lastAssistantText;
+
+	// Fallback: if nothing parsed, return the raw stdout (truncated to reasonable size)
+	if (!result && jsonOutput.trim()) {
+		const cleaned = jsonOutput
+			.split("\n")
+			.filter((l) => {
+				const t = l.trim();
+				// Skip JSON lines and empty lines
+				if (!t || t.startsWith("{")) return false;
+				// Skip thinking blocks
+				if (t.includes("thinking") && t.length < 30) return false;
+				return true;
+			})
+			.join("\n")
+			.trim();
+		if (cleaned) result = cleaned;
+	}
+
+	return result;
 }
 
 // ── Extension ────────────────────────────────────────────────
@@ -325,6 +482,22 @@ export default function (pi: ExtensionAPI) {
 	if (agents.length === 0) {
 		console.warn("[sub-agents] No agent markdown files found in package's agents/ directory");
 	}
+
+		// ── /subagent-stop — 主动终止所有正在运行的 sub-agent ──────
+	pi.registerCommand("subagent-stop", {
+		description: "Terminate all running sub-agents immediately",
+		handler: async (_args, ctx) => {
+			const count = activeChildren.size;
+			if (count === 0) {
+				ctx.ui.notify("ℹ️ 当前没有运行中的 sub-agent", "info");
+				return;
+			}
+			killAllChildren();
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			ctx.ui.notify(`🛑 已终止 ${count} 个 sub-agent 进程`, "warning");
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+		},
+	});
 
 	// ── Register subagent tool (for LLM to use directly) ──────
 	pi.registerTool({
@@ -351,7 +524,6 @@ export default function (pi: ExtensionAPI) {
 					details: {},
 				};
 			}
-			// Use signal directly from agent loop (3rd param), fallback to ctx.signal
 			const abortSignal = signal ?? ctx.signal;
 
 			// Fix #3: Report progress via onUpdate
@@ -362,24 +534,25 @@ export default function (pi: ExtensionAPI) {
 				params.task,
 				ctx.cwd,
 				abortSignal,
-				SUBAGENT_TIMEOUT_MS,
+				undefined, // use agent's default timeout
 				(progress) => {
 					onUpdate?.({ state: "running", message: progress });
 				},
 			);
 			const output = extractFinalOutput(result.output);
+			const dur = (result.durationMs / 1000).toFixed(1);
 			const isError = result.exitCode !== 0 && !output;
 			return {
 				content: [{ type: "text", text: output || result.stderr || "(no output)" }],
-				details: { agent: agent.name, exitCode: result.exitCode },
+				details: { agent: agent.name, exitCode: result.exitCode, durationMs: result.durationMs },
 				isError,
 			};
 		},
 	});
 
 	// ── Review sub-agent (input interception) ─────────────────
-	// Note: In input events ctx.signal may be undefined; timeout in spawnSubagent
-	// prevents runaway processes. Progress is shown via ui.notify.
+	// Fix #3: Better progress + completion feedback with duration.
+	// Fix #4: Longer timeout (300s), -nc/-ne flags, thinking=off.
 
 	pi.on("input", async (event, ctx) => {
 		if (!reviewAgent) return { action: "continue" };
@@ -387,8 +560,6 @@ export default function (pi: ExtensionAPI) {
 		const text = event.text.trim().toLowerCase();
 
 		// Detect review-html skill invocation or explicit review request.
-		// Only match when both "review" intent AND "code/diff/commit" target are present
-		// to avoid false positives on casual uses of the word "review".
 		const isReviewSkill = text.startsWith("/skill:review-html");
 		const hasReviewIntent = text.includes("review") ||
 			text.includes("审查") || text.includes("审阅") || text.includes("review-html");
@@ -400,34 +571,85 @@ export default function (pi: ExtensionAPI) {
 
 		if (!isReviewSkill && !isReviewRequest) return { action: "continue" };
 
+		// ── 自动触发（/skill:review-html）vs 询问确认 ──────
+		// 关键词触发时先询问用户，避免误拦截正常 prompt
+		if (!isReviewSkill) {
+			const ok = await ctx.ui.confirm(
+				"🔍 检测到审查意图",
+				"是否启动 review-sub-agent 审查代码？\n\n" +
+				"Enter = 审查  |  Esc = 作为普通任务处理",
+			);
+			if (!ok) {
+				// 用户选择不审查，放行给主 AI 正常处理
+				return { action: "continue" };
+			}
+		}
+
+		const startTime = Date.now();
 		ctx.ui.setStatus("subagent", "🔍 review-sub-agent reviewing...");
-		ctx.ui.notify("🤖 review-sub-agent 正在审查代码，请稍候...", "info");
+		ctx.ui.notify("🤖 review-sub-agent 正在审查代码（最长 5 分钟），请稍候...", "info");
 
-		const task = `Review the code changes. ${event.text}`;
+		// Use the user's original request directly (avoids prepending redundant text)
+		// The review-agent.md system prompt already instructs on using git diff, etc.
+		const task = event.text;
 
-		// Fix #3: Stream sub-agent progress to user via ui.notify
+		// Fix #3: Progress streaming with elapsed time
 		const result = await spawnSubagent(
 			reviewAgent,
 			task,
 			ctx.cwd,
 			ctx.signal,
-			SUBAGENT_TIMEOUT_MS,
+			undefined, // uses agent's default (300s for review)
 			(progress) => {
-				ctx.ui.notify(progress, "info");
+				ctx.ui.setStatus("subagent", progress.slice(0, 50));
 			},
 		);
-		const output = extractFinalOutput(result.output);
+		const dur = ((Date.now() - startTime) / 1000).toFixed(1);
+
+		// Extract output with fallback to raw stdout
+		let output = extractFinalOutput(result.output);
+		if (!output && result.output.trim()) {
+			// Fallback: extract non-JSON lines from raw stdout
+			const lines = result.output.split("\n").filter((l) => {
+				const t = l.trim();
+				return t && !t.startsWith("{") && !t.startsWith("[");
+			});
+			if (lines.length > 0) {
+				output = lines.join("\n").trim();
+			}
+		}
 
 		if (output) {
-			pi.sendUserMessage(`## Review-sub-agent 审查报告\n\n${output}`);
+			ctx.ui.setStatus("subagent", undefined);
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			ctx.ui.notify(`✅ review-sub-agent 完成 (耗时 ${dur}s)`, "success");
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			// Truncate very long output for the chat message
+			const displayOutput = output.length > 8000
+				? output.slice(0, 8000) + "\n\n... (输出过长已截断)"
+				: output;
+			pi.sendUserMessage(`## ✅ Review-sub-agent 审查报告 (${dur}s)\n\n${displayOutput}`);
 		} else if (result.exitCode !== 0) {
-			ctx.ui.notify(`❌ review-sub-agent failed:\n${result.stderr}`, "error");
+			ctx.ui.setStatus("subagent", undefined);
+			const errMsg = result.stderr || result.output.slice(0, 1000) || "未知错误";
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
+			ctx.ui.notify(`❌ review-sub-agent 失败 (耗时 ${dur}s)\n${errMsg}`, "error");
+			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "error");
 		} else {
-			ctx.ui.notify("✅ review-sub-agent completed (no output)", "success");
+			// output is empty but exitCode === 0
+			ctx.ui.setStatus("subagent", undefined);
+			const rawPreview = result.output.slice(0, 500).trim();
+			if (rawPreview) {
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+				ctx.ui.notify(`✅ review-sub-agent 完成 (耗时 ${dur}s) — 原始输出:\n${rawPreview}`, "success");
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			} else {
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+				ctx.ui.notify(`✅ review-sub-agent 完成 (耗时 ${dur}s) — 无输出内容`, "success");
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			}
 		}
-		ctx.ui.setStatus("subagent", undefined);
 
-		// Return handled so the main agent doesn't also process it
 		return { action: "handled" };
 	});
 }
