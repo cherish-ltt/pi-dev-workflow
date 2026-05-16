@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader, DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { spawnSubagent, extractFinalOutput, type AgentDef } from "./sub-agents";
+import { spawnSubagent, extractFinalOutput, type AgentDef } from "../extensions/sub-agents";
 export type { AgentDef };
 import {
 	Container,
@@ -588,14 +588,5 @@ async function askDevelopmentStart(
 	}
 }
 
-// ── Extension factory (required by pi extension loader) ─────
-//
-// This file lives in extensions/ so pi will attempt to load it.
-// The default export satisfies the loader; the real functionality
-// is consumed by dev-prompts.ts via named imports.
-//
-export default function (_pi: ExtensionAPI) {
-	// grill-me-agent is a helper module, not a standalone extension.
-	// It is imported by dev-prompts.ts to provide grill + PRD phases.
-}
+// Not a pi extension — imported by dev-prompts.ts as a helper module.
 

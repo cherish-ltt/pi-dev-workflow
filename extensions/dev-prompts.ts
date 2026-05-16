@@ -24,7 +24,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { runGrillPhase, runPRDPhase, type AgentDef, type GrillOptions } from "./grill-me-agent";
+import { runGrillPhase, runPRDPhase, type AgentDef, type GrillOptions } from "../helpers/grill-me-agent";
 
 // ── Helpers ──────────────────────────────────────────────────
 
