@@ -35,12 +35,18 @@ const PROGRESS_INTERVAL_MS = 1_500;
 /** Hard limit on accumulated output per subagent (prevents OOM on runaway). */
 const MAX_BUFFER_BYTES = 500_000;
 
-/** Locations to auto-load APPEND_SYSTEM.md / append.system.md from (checked in order). */
-const APPEND_SYSTEM_PATHS = [
-	path.join(osHomedir(), ".pi", "agent", "append.system.md"),
-	".pi/append.system.md",
-	"APPEND_SYSTEM.md",
-];
+/**
+ * Locations to auto-load APPEND_SYSTEM.md / append.system.md from (checked in order).
+ * Defined as a getter so that osHomedir() is called lazily rather than at module init,
+ * avoiding a potential crash when the module is loaded in restricted environments.
+ */
+function getAppendSystemPaths(): string[] {
+	return [
+		path.join(osHomedir(), ".pi", "agent", "append.system.md"),
+		".pi/append.system.md",
+		"APPEND_SYSTEM.md",
+	];
+}
 
 /** Cache for append.system.md content, keyed by cwd to support multi-project isolation. */
 const _appendSystemCache = new Map<string, string | null>();
@@ -48,7 +54,7 @@ const _appendSystemCache = new Map<string, string | null>();
 function loadAppendSystem(cwd: string): string | null {
 	const cached = _appendSystemCache.get(cwd);
 	if (cached !== undefined) return cached;
-	for (const loc of APPEND_SYSTEM_PATHS) {
+	for (const loc of getAppendSystemPaths()) {
 		const abs = path.isAbsolute(loc) ? loc : path.join(cwd, loc);
 		try {
 			const content = fs.readFileSync(abs, "utf-8").trim();
@@ -341,9 +347,7 @@ export async function spawnSubagent(
 				onProgress(`[${agent.name}] (${elapsed}s) ⏳ 处理中...`);
 			}
 		}, PROGRESS_INTERVAL_MS);
-		if (typeof progressTimer === "object" && "unref" in progressTimer) {
-			progressTimer.unref();
-		}
+		progressTimer.unref();
 
 		const settle = (result: SubagentResult) => {
 			if (settled) return;
@@ -406,7 +410,7 @@ export async function spawnSubagent(
 				durationMs: 0,
 			});
 		}, effectiveTimeout);
-		if (typeof timer === "object" && "unref" in timer) timer.unref();
+		timer.unref();
 
 		// ── Abort signal wiring ─────────────────────────────
 		if (signal) {
@@ -426,6 +430,7 @@ export function extractFinalOutput(jsonOutput: string): string {
 	// Parse JSON lines from --mode json output
 	// Try multiple event formats to find the final assistant response
 	let result = "";
+	let textEndSeen = false;
 
 	for (const line of jsonOutput.split("\n")) {
 		if (!line.trim()) continue;
@@ -434,7 +439,9 @@ export function extractFinalOutput(jsonOutput: string): string {
 
 			// Format 1: pi's --mode json message_update with text_delta (streaming)
 			//   {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"..."}}
-			if (event.type === "message_update" &&
+			// Once text_end has been seen, skip subsequent text_delta events to
+			// avoid appending stale deltas that arrive out of order.
+			if (!textEndSeen && event.type === "message_update" &&
 			    event.assistantMessageEvent?.type === "text_delta") {
 				result += event.assistantMessageEvent.delta || "";
 			}
@@ -445,6 +452,7 @@ export function extractFinalOutput(jsonOutput: string): string {
 			    event.assistantMessageEvent?.type === "text_end" &&
 			    event.assistantMessageEvent.content) {
 				result = event.assistantMessageEvent.content;
+				textEndSeen = true;
 			}
 
 			// Format 2: Anthropic-style message events

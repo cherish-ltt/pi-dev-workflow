@@ -483,7 +483,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-feat ──────────────────────────────────────────────
 	pi.registerCommand("dev-feat", {
 		description: "(prompt wizard) 新功能/创意生成 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "feat", "新功能/创意生成", FEAT_QUESTIONS, assembleFeatPrompt);
 		},
 	});
@@ -491,7 +491,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-fix ───────────────────────────────────────────────
 	pi.registerCommand("dev-fix", {
 		description: "(prompt wizard) 问题排查/错误修正 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "fix", "问题排查/错误修正", FIX_QUESTIONS, assembleFixPrompt);
 		},
 	});
@@ -499,7 +499,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-doc ───────────────────────────────────────────────
 	pi.registerCommand("dev-doc", {
 		description: "(prompt wizard) 文档生成/总结 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "doc", "文档生成/总结", DOC_QUESTIONS, assembleDocPrompt);
 		},
 	});
@@ -507,7 +507,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-refactor ──────────────────────────────────────────
 	pi.registerCommand("dev-refactor", {
 		description: "(prompt wizard) 重构/优化现有结构 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "refactor", "重构/优化", REFACTOR_QUESTIONS, assembleRefactorPrompt);
 		},
 	});
@@ -515,7 +515,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-test ──────────────────────────────────────────────
 	pi.registerCommand("dev-test", {
 		description: "(prompt wizard) 测试用例生成 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "test", "测试用例/评估", TEST_QUESTIONS, assembleTestPrompt);
 		},
 	});
@@ -523,7 +523,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-chore ─────────────────────────────────────────────
 	pi.registerCommand("dev-chore", {
 		description: "(prompt wizard) 日常维护/杂项自动化 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "chore", "日常维护/自动化", CHORE_QUESTIONS, assembleChorePrompt);
 		},
 	});
@@ -531,7 +531,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-perf ──────────────────────────────────────────────
 	pi.registerCommand("dev-perf", {
 		description: "(prompt wizard) 性能优化 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "perf", "性能优化", PERF_QUESTIONS, assemblePerfPrompt);
 		},
 	});
@@ -539,7 +539,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-style ─────────────────────────────────────────────
 	pi.registerCommand("dev-style", {
 		description: "(prompt wizard) 风格/格式调整 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "style", "风格/格式调整", STYLE_QUESTIONS, assembleStylePrompt);
 		},
 	});
@@ -547,7 +547,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-security ──────────────────────────────────────────
 	pi.registerCommand("dev-security", {
 		description: "(prompt wizard) 安全审查 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "security", "安全审查", SECURITY_QUESTIONS, assembleSecurityPrompt);
 		},
 	});
@@ -555,7 +555,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-explain ───────────────────────────────────────────
 	pi.registerCommand("dev-explain", {
 		description: "(prompt wizard) 概念解释 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "explain", "概念解释", EXPLAIN_QUESTIONS, assembleExplainPrompt);
 		},
 	});
@@ -563,7 +563,7 @@ export default function (pi: ExtensionAPI) {
 	// ── /dev-compare ───────────────────────────────────────────
 	pi.registerCommand("dev-compare", {
 		description: "(prompt wizard) 对比评估 — 交互填写后发送优化提示词给主代理",
-		handler: async (args, ctx) => {
+		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "compare", "对比评估", COMPARE_QUESTIONS, assembleComparePrompt);
 		},
 	});

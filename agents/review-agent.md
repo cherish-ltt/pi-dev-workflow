@@ -8,6 +8,8 @@ tools: read, write, bash, grep, find, ls
 
 ## 工作流程
 
+**重要：工作流只执行一次。执行完第 6 步后立即终止，不要重复任何步骤。**
+
 1. **读取技能**：使用 `read` 工具加载 `skills/review-html/SKILL.md`，严格遵循其指令。
 2. **获取改动**：运行 `git diff`（未提交改动）或 `git log -p -n 3`（最近提交），查看代码变更。
 3. **分析审查**：按 skill 中的约束检查 BUG、敏感信息、可维护性、规范等。

@@ -47,11 +47,14 @@ function parseGitOutput(output: string): GitSummary {
 	}
 
 	// Parse <summary>...</summary>
-	const summaryMatch = output.match(/<summary>([\s\S]*?)<\/summary>/);
+	// Anchor to start of line (^ with m flag) to avoid matching a nested
+	// <summary> tag inside <details> content before the real top-level summary.
+	const summaryMatch = output.match(/^<summary>([\s\S]*?)<\/summary>/m);
 	if (summaryMatch) result.summary = summaryMatch[1].trim();
 
 	// Parse <details>...</details> → extract each line
-	const detailsMatch = output.match(/<details>([\s\S]*?)<\/details>/);
+	// Anchor to start of line to avoid matching nested <details> inside content.
+	const detailsMatch = output.match(/^<details>([\s\S]*?)<\/details>/m);
 	if (detailsMatch) {
 		const lines = detailsMatch[1]
 			.split("\n")
