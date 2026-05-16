@@ -191,29 +191,86 @@ interface RawGrillOutput {
 	}>;
 }
 
+/**
+ * Recursively search an object for a field named "questions" whose value is an array.
+ */
+function deepFindQuestions(obj: unknown): Array<{ id?: number; question?: string; options?: string[] }> | null {
+	if (!obj || typeof obj !== "object") return null;
+	if (Array.isArray(obj)) {
+		for (const item of obj) {
+			const found = deepFindQuestions(item);
+			if (found) return found;
+		}
+		return null;
+	}
+	const record = obj as Record<string, unknown>;
+	if ("questions" in record && Array.isArray(record.questions)) {
+		return record.questions as Array<{ id?: number; question?: string; options?: string[] }>;
+	}
+	for (const val of Object.values(record)) {
+		const found = deepFindQuestions(val);
+		if (found) return found;
+	}
+	return null;
+}
+
+/**
+ * Try to extract question-like objects from raw text — any JSON array where
+ * items have "question" (string) and "options" (string[]).
+ */
+function extractQuestionArray(raw: string): Array<{ question: string; options: string[] }> {
+	const arrayMatch = raw.match(/\[\s*\{[\s\S]*?"question"[\s\S]*?"options"[\s\S]*?\}\s*\]/);
+	if (!arrayMatch) return [];
+	try {
+		const items = JSON.parse(arrayMatch[0]);
+		if (!Array.isArray(items)) return [];
+		return items.filter((item: unknown): item is { question: string; options: string[] } => {
+			if (!item || typeof item !== "object") return false;
+			const r = item as Record<string, unknown>;
+			return typeof r.question === "string" && Array.isArray(r.options) && r.options.length > 0;
+		});
+	} catch {
+		return [];
+	}
+}
+
 /** Parse sub-agent output into a list of GrillQuestions. */
 export function parseGrillQuestions(raw: string): GrillQuestion[] {
-	// Try to find JSON block
-	const jsonMatch = raw.match(/\{[\s\S]*"questions"[\s\S]*\}/);
-	const body = jsonMatch ? jsonMatch[0] : raw;
+	if (!raw || !raw.trim()) return [];
 
-	try {
-		const parsed: RawGrillOutput = JSON.parse(body);
-		if (parsed.questions && Array.isArray(parsed.questions)) {
-			return parsed.questions
-				.filter((q) => q.question && q.options && q.options.length > 0)
-				.map((q, i) => ({
-					id: q.id ?? i + 1,
-					question: q.question!,
-					options: q.options!,
-				}));
+	// Strategy 1: find any top-level {} JSON, try to deep-search for "questions" key
+	const jsonMatch = raw.match(/\{[\s\S]*\}/);
+	if (jsonMatch) {
+		const candidate = jsonMatch[0]
+			.replace(/^\s*```(?:json)?\s*/, "")
+			.replace(/\s*```\s*$/, "");
+		try {
+			const parsed = JSON.parse(candidate);
+			const found = deepFindQuestions(parsed);
+			if (found && found.length > 0) {
+				return found
+					.filter((q) => q.question && q.options && q.options.length > 0)
+					.map((q, i) => ({
+						id: q.id ?? i + 1,
+						question: q.question!,
+						options: q.options!,
+					}));
+			}
+		} catch {
+			// fall through
 		}
-	} catch {
-		// Try to extract from code block
-		const codeBlock = raw.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-		if (codeBlock) {
-			return parseGrillQuestions(codeBlock[1]);
-		}
+	}
+
+	// Strategy 2: try to find a question-like JSON array directly
+	const direct = extractQuestionArray(raw);
+	if (direct.length > 0) {
+		return direct.map((q, i) => ({ id: i + 1, question: q.question, options: q.options }));
+	}
+
+	// Strategy 3: extract content from markdown code block and retry
+	const codeBlock = raw.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+	if (codeBlock) {
+		return parseGrillQuestions(codeBlock[1]);
 	}
 
 	return [];
@@ -269,7 +326,7 @@ export async function runGrillPhase(
 	}
 
 	// ── Step 2: Call sub-agent with BorderedLoader ───────────
-	const questions = await ctx.ui.custom<GrillQuestion[]>((tui, theme, _kb, done) => {
+	let questions = await ctx.ui.custom<GrillQuestion[]>((tui, theme, _kb, done) => {
 		const loader = new BorderedLoader(
 			tui,
 			theme,
@@ -281,7 +338,7 @@ export async function runGrillPhase(
 			agentDef,
 			assembledPrompt,
 			ctx.cwd,
-			loader.signal, // use loader's abort signal for cancellation
+			loader.signal,
 			undefined,
 			(progress) => {
 				loader.setText(`🧠 ${progress.slice(0, 60)}`);
@@ -297,9 +354,41 @@ export async function runGrillPhase(
 		return loader;
 	});
 
+	// ── Step 2b: Retry dialog if no questions generated ──────
 	if (questions.length === 0) {
-		ctx.ui.notify("⚠️ AI 未能生成评审问题，跳过 Grill 阶段", "warning");
-		return defaultResult;
+		const choice = await ctx.ui.select(
+			"⚠️ AI 未能成功生成评审问题",
+			[
+				"🔄 重新尝试生成评审问题",
+				"⏭️ 跳过 Grill，直接发送 Prompt",
+				"❌ 取消 (Esc)",
+			],
+		);
+
+		switch (choice) {
+			case "🔄 重新尝试生成评审问题": {
+				questions = await ctx.ui.custom<GrillQuestion[]>((tui, theme, _kb, done) => {
+					const loader = new BorderedLoader(tui, theme, loaderLabel);
+					loader.onAbort = () => done([]);
+					spawnSubagent(agentDef, assembledPrompt, ctx.cwd, loader.signal, undefined)
+						.then((r) => { done(parseGrillQuestions(extractFinalOutput(r.output))); })
+						.catch(() => done([]));
+					return loader;
+				});
+				if (questions.length === 0) {
+					ctx.ui.notify("⚠️ 再次尝试仍然失败，跳过 Grill 阶段", "warning");
+					return defaultResult;
+				}
+				break;
+			}
+			case "⏭️ 跳过 Grill，直接发送 Prompt":
+				ctx.ui.notify("⏭️ 已跳过 Grill 阶段", "info");
+				return defaultResult;
+			case "❌ 取消 (Esc)":
+			default:
+				ctx.ui.notify("❌ 操作已取消", "warning");
+				return { ...defaultResult, cancelled: true };
+		}
 	}
 
 	ctx.ui.notify(`✅ AI 生成了 ${questions.length} 个评审问题`, "success");

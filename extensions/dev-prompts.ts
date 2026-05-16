@@ -548,7 +548,11 @@ async function runWizardWithGrill(
 			questionTitle: grillOptions.questionTitle,
 			loaderLabel: grillOptions.loaderLabel,
 		});
-		finalPrompt = grillResult.cancelled ? basePrompt : grillResult.enhancedPrompt;
+		if (grillResult.cancelled) {
+			ctx.ui.notify("❌ 操作已取消", "warning");
+			return;
+		}
+		finalPrompt = grillResult.enhancedPrompt;
 	}
 
 	ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
@@ -707,9 +711,11 @@ export default function (pi: ExtensionAPI) {
 
 			// ── Phase 3: Grill (设计评审) ───────────────────────
 			const grillResult = await runGrillPhase(basePrompt, ctx);
-			const finalPrompt = grillResult.cancelled
-				? basePrompt
-				: grillResult.enhancedPrompt;
+			if (grillResult.cancelled) {
+				ctx.ui.notify("❌ 操作已取消", "warning");
+				return;
+			}
+			const finalPrompt = grillResult.enhancedPrompt;
 
 			// ── Phase 4: Send to main agent ─────────────────────
 			ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
@@ -721,7 +727,7 @@ export default function (pi: ExtensionAPI) {
 
 			// ── Phase 6: PRD generation ─────────────────────────
 			const moduleHint = (answers as FeatFields).module || "feature";
-			const grillContext = finalPrompt; // use the full prompt as context
+			const grillContext = finalPrompt;
 			await runPRDPhase(grillContext, moduleHint, pi, ctx);
 		},
 	});
