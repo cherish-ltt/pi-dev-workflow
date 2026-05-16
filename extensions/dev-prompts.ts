@@ -135,7 +135,7 @@ function assembleDocPrompt(f: DocFields): string {
 	}
 	lines.push("**任务**：");
 	lines.push("1. 提取核心要点，按逻辑结构重组（概述 → 快速开始 → 详细说明 → 常见问题）。");
-	lines.push(`2. 添加至少 2 个真实可运行的示例（使用 ${wrap(f.language)} 语法高亮）。`);
+	lines.push(`2. 添加至少 1 个真实可运行的示例（使用 ${wrap(f.language)} 语法高亮）。`);
 	lines.push("3. 如存在争议点，列出不同观点并注明\"无共识\"。");
 	if (!isEmpty(f.existingMaterial)) {
 		lines.push(`**已有材料**：${f.existingMaterial!.trim()}`);
@@ -161,7 +161,7 @@ function assembleRefactorPrompt(f: RefactorFields): string {
 	lines.push("");
 	lines.push(`**背景**：当前代码存在 ${wrap(f.problems)}。`);
 	lines.push("**任务**：");
-	lines.push("1. 识别 3 个主要问题。");
+	lines.push("1. 识别主要问题。");
 	lines.push("2. 提出重构方案，说明改动前后差异。");
 	lines.push("3. 输出重构后的完整版本。");
 	lines.push("**硬性约束**：");
@@ -414,7 +414,7 @@ const FIX_QUESTIONS = [
 ];
 
 const DOC_QUESTIONS = [
-	{ label: "模块/API 名称", placeholder: "如 AuthService, REST API v2...", key: "moduleName" },
+	{ label: "模块/API/doc 名称", placeholder: "如 AuthService, REST API v2...", key: "moduleName" },
 	{ label: "目标受众", placeholder: "如 小白 / 前端开发者 / 架构师", key: "audience" },
 	{ label: "关键信息点", placeholder: "他们需要了解如何使用认证接口", key: "keyInfo" },
 	{ label: "示例语言", placeholder: "如 TypeScript, Python, curl...", key: "language" },
