@@ -42,24 +42,25 @@ const APPEND_SYSTEM_PATHS = [
 	"APPEND_SYSTEM.md",
 ];
 
-// Lazily resolved
-let _appendSystemContent: string | null | undefined; // undefined = not checked yet
+/** Cache for append.system.md content, keyed by cwd to support multi-project isolation. */
+const _appendSystemCache = new Map<string, string | null>();
 
 function loadAppendSystem(cwd: string): string | null {
-	if (_appendSystemContent !== undefined) return _appendSystemContent;
+	const cached = _appendSystemCache.get(cwd);
+	if (cached !== undefined) return cached;
 	for (const loc of APPEND_SYSTEM_PATHS) {
 		const abs = path.isAbsolute(loc) ? loc : path.join(cwd, loc);
 		try {
 			const content = fs.readFileSync(abs, "utf-8").trim();
 			if (content) {
-				_appendSystemContent = content;
+				_appendSystemCache.set(cwd, content);
 				return content;
 			}
 		} catch {
 			// file not found or unreadable, try next
 		}
 	}
-	_appendSystemContent = null;
+	_appendSystemCache.set(cwd, null);
 	return null;
 }
 
@@ -108,7 +109,10 @@ function osHomedir(): string {
 const activeChildren = new Set<import("node:child_process").ChildProcess>();
 
 function killAllChildren(): void {
-	for (const proc of activeChildren) {
+	// Snapshot the Set to avoid potential iteration issues if exit callbacks
+	// modify activeChildren during the loop.
+	const children = [...activeChildren];
+	for (const proc of children) {
 		try {
 			if (proc.pid !== undefined && !proc.killed) {
 				proc.kill("SIGTERM");
