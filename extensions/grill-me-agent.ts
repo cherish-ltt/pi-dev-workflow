@@ -18,6 +18,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader, DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { spawnSubagent, extractFinalOutput, type AgentDef } from "./sub-agents";
+export type { AgentDef };
 import {
 	Container,
 	SelectList,
@@ -221,6 +222,22 @@ export function parseGrillQuestions(raw: string): GrillQuestion[] {
 // ── Grill Phase ──────────────────────────────────────────────
 
 /**
+ * Options for customizing the grill phase.
+ */
+export interface GrillOptions {
+	/** Custom sub-agent definition. Defaults to GRILL_AGENT_DEF. */
+	agentDef?: AgentDef;
+	/** Title for the confirm dialog (e.g. "🔍 Bug 根因分析评审"). */
+	title?: string;
+	/** Description for the confirm dialog. */
+	description?: string;
+	/** Title prefix for each question TUI (e.g. "Bug 根因分析"). */
+	questionTitle?: string;
+	/** Label shown in the loading state (e.g. "AI 正在分析 Bug 并生成根因问题..."). */
+	loaderLabel?: string;
+}
+
+/**
  * Run the grill phase:
  * 1. Confirm with user
  * 2. Call sub-agent → gets structured questions
@@ -231,6 +248,7 @@ export function parseGrillQuestions(raw: string): GrillQuestion[] {
 export async function runGrillPhase(
 	assembledPrompt: string,
 	ctx: ExtensionCommandContext,
+	options?: GrillOptions,
 ): Promise<GrillResult> {
 	const defaultResult: GrillResult = {
 		cancelled: false,
@@ -238,11 +256,14 @@ export async function runGrillPhase(
 		enhancedPrompt: assembledPrompt,
 	};
 
+	const agentDef = options?.agentDef ?? GRILL_AGENT_DEF;
+	const confirmTitle = options?.title ?? "🔍 设计方案评审";
+	const confirmDesc = options?.description ?? "是否进入设计评审 (Grill) 模式？\nAI 会从架构、数据流、边界条件、安全等多个维度挑战你的设计。";
+	const qTitlePrefix = options?.questionTitle ?? "设计方案评审";
+	const loaderLabel = options?.loaderLabel ?? "🧠 AI 正在分析代码并生成评审问题...";
+
 	// ── Step 1: Confirm entering grill mode ──────────────────
-	const enterGrill = await ctx.ui.confirm(
-		"🔍 设计方案评审",
-		"是否进入设计评审 (Grill) 模式？\nAI 会从架构、数据流、边界条件、安全等多个维度挑战你的设计。",
-	);
+	const enterGrill = await ctx.ui.confirm(confirmTitle, confirmDesc);
 	if (!enterGrill) {
 		return { ...defaultResult, cancelled: true };
 	}
@@ -252,12 +273,12 @@ export async function runGrillPhase(
 		const loader = new BorderedLoader(
 			tui,
 			theme,
-			"🧠 AI 正在分析代码并生成评审问题...",
+			loaderLabel,
 		);
 		loader.onAbort = () => done([]);
 
 		spawnSubagent(
-			GRILL_AGENT_DEF,
+			agentDef,
 			assembledPrompt,
 			ctx.cwd,
 			loader.signal, // use loader's abort signal for cancellation
@@ -288,7 +309,7 @@ export async function runGrillPhase(
 
 	for (let idx = 0; idx < questions.length; idx++) {
 		const q = questions[idx];
-		const answer = await showQuestionTUI(ctx, q, idx + 1, questions.length);
+		const answer = await showQuestionTUI(ctx, q, idx + 1, questions.length, qTitlePrefix);
 
 		if (answer === null) {
 			// User cancelled the whole grill
@@ -330,6 +351,7 @@ async function showQuestionTUI(
 	q: GrillQuestion,
 	currentIndex: number,
 	totalCount: number,
+	titlePrefix = "设计方案评审",
 ): Promise<string | null> {
 	const selectItems: SelectItem[] = q.options.map((opt, i) => ({
 		value: `opt-${i}`,
@@ -342,7 +364,7 @@ async function showQuestionTUI(
 		description: "输入你自己的回答，不受选项限制",
 	});
 
-	const title = `设计方案评审 (问题 ${currentIndex}/${totalCount})`;
+	const title = `${titlePrefix} (问题 ${currentIndex}/${totalCount})`;
 
 	const value = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
 		const container = new Container();
