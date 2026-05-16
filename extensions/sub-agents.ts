@@ -70,25 +70,34 @@ function loadAppendSystem(cwd: string): string | null {
 	return null;
 }
 
-/** Find the newest HTML review file in pi-review/ directory. */
+/** Find the newest HTML review file in pi-review/ or pi-dev-output/pi-review/ directory. */
 function findNewestReviewHtml(cwd: string): string {
-	try {
-		const reviewDir = path.join(cwd, "pi-review");
-		if (fs.existsSync(reviewDir)) {
-			const files = fs.readdirSync(reviewDir)
-				.filter(f => f.endsWith(".html"))
-				.map(f => ({
-					name: f,
-					mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
-				}))
-				.sort((a, b) => b.mtime - a.mtime);
-			if (files.length > 0) {
-				return "pi-review/" + files[0].name;
+	const candidates = [
+		path.join(cwd, "pi-review"),
+		path.join(cwd, "pi-dev-output", "pi-review"),
+	];
+
+	for (const reviewDir of candidates) {
+		try {
+			if (fs.existsSync(reviewDir)) {
+				const files = fs.readdirSync(reviewDir)
+					.filter(f => f.endsWith(".html"))
+					.map(f => ({
+						name: f,
+						mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
+					}))
+					.sort((a, b) => b.mtime - a.mtime);
+				if (files.length > 0) {
+					// Return relative path from cwd
+					const rel = path.relative(cwd, reviewDir);
+					return rel + "/" + files[0].name;
+				}
 			}
+		} catch {
+			// ignore fs errors
 		}
-	} catch {
-		// ignore fs errors
 	}
+
 	return "";
 }
 

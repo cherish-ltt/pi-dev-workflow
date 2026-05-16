@@ -24,6 +24,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { runGrillPhase, runPRDPhase } from "./grill-me-agent";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -482,9 +483,43 @@ const COMPARE_QUESTIONS = [
 export default function (pi: ExtensionAPI) {
 	// ── /dev-feat ──────────────────────────────────────────────
 	pi.registerCommand("dev-feat", {
-		description: "(prompt wizard) 新功能/创意生成 — 交互填写后发送优化提示词给主代理",
+		description: "(prompt wizard) 新功能/创意生成 — 支持设计评审 (Grill) + PRD 生成",
 		handler: async (_args, ctx) => {
-			await runWizard(ctx, pi, "feat", "新功能/创意生成", FEAT_QUESTIONS, assembleFeatPrompt);
+			// ── Phase 1: Wizard ──────────────────────────────────
+			ctx.ui.notify("📋 /dev-feat — 新功能/创意生成，请逐项填写以下信息（留空跳过对应段落，Esc 取消）", "info");
+
+			const answers: Record<string, string> = {};
+			for (const q of FEAT_QUESTIONS) {
+				const val = await ask(ctx, q.label, q.placeholder);
+				if (val === undefined) {
+					ctx.ui.notify("❌ 已取消", "warning");
+					return;
+				}
+				answers[q.key] = val;
+			}
+
+			// ── Phase 2: Assemble base prompt ───────────────────
+			const basePrompt = assembleFeatPrompt(answers as FeatFields);
+			ctx.ui.notify(`✅ 基本信息已收集，共 ${FEAT_QUESTIONS.length} 项`, "success");
+
+			// ── Phase 3: Grill (设计评审) ───────────────────────
+			const grillResult = await runGrillPhase(basePrompt, ctx);
+			const finalPrompt = grillResult.cancelled
+				? basePrompt
+				: grillResult.enhancedPrompt;
+
+			// ── Phase 4: Send to main agent ─────────────────────
+			ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
+			pi.sendUserMessage(finalPrompt);
+			ctx.ui.notify(`📝 /dev-feat 提示词已投递，主代理正在处理`, "info");
+
+			// ── Phase 5: Wait for agent to finish ───────────────
+			await ctx.waitForIdle();
+
+			// ── Phase 6: PRD generation ─────────────────────────
+			const moduleHint = (answers as FeatFields).module || "feature";
+			const grillContext = finalPrompt; // use the full prompt as context
+			await runPRDPhase(grillContext, moduleHint, pi, ctx);
 		},
 	});
 
