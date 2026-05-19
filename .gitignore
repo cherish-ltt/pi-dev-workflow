@@ -10,4 +10,4 @@ Thumbs.db
 node_modules/
 
 # test
-tests/
+tests/pi-dev-output/

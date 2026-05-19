@@ -26,6 +26,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { runGrillPhase, runPRDPhase, saveAnswerFile, recoverFromBackup, type GrillOptions } from "./grill-me-agent";
 import { discoverAgents } from "./sub-agents";
+import { runWorkflow, loadCheckpointFromFile, type WorkflowStepDef } from "./workflow-engine";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -360,6 +361,44 @@ const _refactorGrillAgent = discoverAgents().find(a => a.name === "dev-refactor-
 const _testGrillAgent = discoverAgents().find(a => a.name === "dev-test-grill-agent")!;
 const _perfGrillAgent = discoverAgents().find(a => a.name === "dev-perf-grill-agent")!;
 
+// ── Workflow configurations ──────────────────────────────────
+
+/** /dev-feat workflo: planner -> {worker->reviewer} -> {trimmer->reviewer} -> [docWriter] */
+const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
+	{
+		id: "planner",
+		label: "📋 生成实施计划",
+		type: "auto",
+		agentName: "planner",
+		timeoutMs: 900_000, // 15 min
+	},
+	{
+		id: "worker-reviewer",
+		label: "🔧 实施代码 → 审查",
+		type: "loop-group",
+		loopAgentName: "worker",
+		reviewAgentName: "reviewer",
+		maxLoops: 3,
+		timeoutMs: 900_000, // 15 min
+	},
+	{
+		id: "trimmer-reviewer",
+		label: "✂️ 精简代码 → 审查",
+		type: "loop-group",
+		loopAgentName: "trimmer",
+		reviewAgentName: "reviewer",
+		maxLoops: 3,
+		timeoutMs: 300_000, // 5 min
+	},
+	{
+		id: "docWriter",
+		label: "📝 更新文档",
+		type: "confirm",
+		agentName: "docWriter",
+		timeoutMs: 300_000, // 5 min
+	},
+];
+
 // ── Command runner ───────────────────────────────────────────
 
 /**
@@ -555,7 +594,7 @@ const COMPARE_QUESTIONS = [
 export default function (pi: ExtensionAPI) {
 	// ── /dev-feat ──────────────────────────────────────────────
 	pi.registerCommand("dev-feat", {
-		description: "(prompt wizard) 新功能/创意生成 — 支持设计评审 (Grill) + PRD 生成",
+		description: "(prompt wizard) 新功能/创意生成 — 支持设计评审 (Grill) + 自动化工作流",
 		handler: async (_args, ctx) => {
 			// ── Phase 1: Wizard ──────────────────────────────────
 			ctx.ui.notify("📋 /dev-feat — 新功能/创意生成，请逐项填写以下信息（留空跳过对应段落，Esc 取消）", "info");
@@ -582,21 +621,32 @@ export default function (pi: ExtensionAPI) {
 			}
 			const finalPrompt = grillResult.enhancedPrompt;
 
-			// ── Phase 4: Send to main agent ─────────────────────
+			// ── Phase 4: Ask "enter workflow?" ─────────────────
+			const enterWorkflow = await ctx.ui.confirm(
+				"🚀 进入自动化工作流",
+				"是否进入自动化工作流？\n\n工作流将自动执行以下步骤：\n" +
+				"1. 📋 Planner — 分析代码库并生成实施计划\n" +
+				"2. 🔧 Worker → Reviewer — 实施代码并审查\n" +
+				"3. ✂️ Trimmer → Reviewer — 精简代码并审查\n" +
+				"4. 📝 DocWriter — 更新文档\n\n" +
+				"选择「否」将使用传统模式，直接发送 prompt 给主代理。",
+			);
+
+			if (enterWorkflow) {
+				await runWorkflow(ctx, pi, finalPrompt, { steps: FEAT_WORKFLOW_STEPS });
+				return;
+			}
+
+			// ── Legacy: Send to main agent ──────────────────────
 			if (!finalPrompt) {
 				ctx.ui.notify("⚠️ 最终提示词为空，正在尝试从备份文件恢复...", "warning");
 				const recovered = recoverFromBackup(ctx.cwd);
 				if (recovered) {
 					ctx.ui.notify("✅ 已从备份文件恢复提示词内容", "success");
-					const recoveredPath = saveAnswerFile(ctx.cwd, recovered);
+					const answerPath = saveAnswerFile(ctx.cwd, recovered);
 					ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
 					pi.sendUserMessage(recovered, { deliverAs: "followUp" });
-					ctx.ui.notify(`📝 /dev-feat 提示词已投递（恢复自备份），主代理正在处理。备份: ${recoveredPath}`, "info");
-					// ── Phase 5: Wait for agent to finish ───────────────
-					await ctx.waitForIdle();
-					// ── Phase 6: PRD generation ─────────────────────────
-					const moduleHint = (answers as FeatFields).module || "feature";
-					await runPRDPhase(recovered, moduleHint, pi, ctx);
+					ctx.ui.notify(`📝 /dev-feat 提示词已投递（恢复自备份），主代理正在处理。备份: ${answerPath}`, "info");
 					return;
 				} else {
 					ctx.ui.notify("❌ 错误：最终提示词为空且无可用备份，无法发送", "error");
@@ -607,14 +657,6 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
 			pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
 			ctx.ui.notify(`📝 /dev-feat 提示词已投递，主代理正在处理。备份: ${answerPath}`, "info");
-
-			// ── Phase 5: Wait for agent to finish ───────────────
-			await ctx.waitForIdle();
-
-			// ── Phase 6: PRD generation ─────────────────────────
-			const moduleHint = (answers as FeatFields).module || "feature";
-			const grillContext = finalPrompt;
-			await runPRDPhase(grillContext, moduleHint, pi, ctx);
 		},
 	});
 
@@ -745,6 +787,21 @@ export default function (pi: ExtensionAPI) {
 		description: "(prompt wizard) 对比评估 — 交互填写后发送优化提示词给主代理",
 		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "compare", "对比评估", COMPARE_QUESTIONS, assembleComparePrompt);
+		},
+	});
+
+	// ── /dev-workflow-continue — 恢复中断的工作流 ─────────────
+	pi.registerCommand("dev-workflow-continue", {
+		description: "恢复上次中断的自动化工作流（从 checkpoint 继续）",
+		handler: async (_args, ctx) => {
+			const cp = loadCheckpointFromFile(ctx.cwd);
+			if (!cp) {
+				ctx.ui.notify("❌ 未找到中断的工作流 checkpoint", "error");
+				return;
+			}
+			ctx.ui.notify(`🔄 正在恢复工作流 (${cp.updatedAt})...`, "info");
+			// runWorkflow 内部会检测 checkpoint 并自动恢复
+			await runWorkflow(ctx, pi, cp.prompt, { steps: FEAT_WORKFLOW_STEPS });
 		},
 	});
 }
