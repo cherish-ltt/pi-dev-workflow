@@ -8,8 +8,8 @@
  *   - uiSelect()     — replaces ctx.ui.select() with wrapping
  *   - uiConfirm()    — replaces ctx.ui.confirm() with wrapping
  *   - uiInput()      — replaces ctx.ui.input() with wrapping
- *   - uiNotify()     — persistent notification in session via sendMessage
- *   - WorkflowWidget — persistent progress panel (widget)
+ *   - updateWorkflowWidget — persistent progress panel (widget)
+ *   - sendWorkflowResult() — persistent session completion message
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -61,6 +61,11 @@ function bold(theme: Theme, text: string): string {
 	return ((theme as { bold?: (s: string) => string }).bold?.(text)) ?? text;
 }
 
+/** Theme-aware dim. */
+function dim(theme: Theme, text: string): string {
+	return theme.fg("dim", text);
+}
+
 // ── Select (replaces ctx.ui.select) ──────────────────────────
 
 /**
@@ -80,7 +85,6 @@ export function uiSelect(
 	return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
 		const container = new Container();
 
-		// Title
 		const titleWrapped = wrapTextWithAnsi(title, Math.max(20, process.stdout.columns - 6));
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(theme.fg("accent", bold(theme, `  ${titleWrapped[0] ?? title}`)), 0, 0));
@@ -202,7 +206,7 @@ export function uiInput(
 
 		const input = new Input(placeholder ?? "", width - 2);
 		input.onSubmit = (val) => {
-			if (required && !val.trim()) return; // keep waiting
+			if (required && !val.trim()) return;
 			done(val || "");
 		};
 		input.onCancel = () => done(undefined);
@@ -224,33 +228,29 @@ export function uiInput(
 	});
 }
 
-// ── Notify in session (replaces ctx.ui.notify for persistence) ──
+// ═══════════════════════════════════════════════════════════════
+//  Workflow Progress Widget
+// ═══════════════════════════════════════════════════════════════
 
 /**
- * Send a persistent notification into the conversation session.
- * Uses pi.sendMessage() with a custom type for proper rendering.
+ * A single sub-step within a workflow step (e.g. planner, worker, reviewer).
  */
-export function notifyInSession(
-	pi: ExtensionAPI,
-	title: string,
-	body: string,
-	type: "info" | "success" | "warning" | "error" = "info",
-): void {
-	const icon = type === "success" ? "✅" : type === "warning" ? "⚠️" : type === "error" ? "❌" : "ℹ️";
-	try {
-		pi.sendMessage({
-			customType: "dev-workflow-notify",
-			content: `${icon} **${title}**\n\n${body}`,
-			display: true,
-			details: { type, title, body },
-		});
-	} catch {
-		// Fallback if sendMessage fails
-		console.log(`[workflow] ${icon} ${title}: ${body}`);
-	}
+export interface WorkflowSubStepWidgetState {
+	agent: string;
+	status: "pending" | "running" | "done" | "failed";
+	/** Recent tool activity (e.g. "edit:src/main.rs", "read:config.json") */
+	tools?: string[];
+	/** Output file paths */
+	outputs?: string[];
+	/** Free-form detail text (e.g. "3 files changed") */
+	detail?: string;
+	/** Elapsed time for this sub-step */
+	durationMs?: number;
+	/** Token usage */
+	tokenCount?: number;
+	/** Tool usage count */
+	toolCount?: number;
 }
-
-// ── Workflow Progress Widget ─────────────────────────────────
 
 /**
  * Workflow step state for the widget.
@@ -258,15 +258,14 @@ export function notifyInSession(
 export interface WorkflowStepWidgetState {
 	label: string;
 	status: "pending" | "running" | "done" | "failed" | "skipped";
+	/** Timeout in ms for this step */
+	timeoutMs?: number;
 	durationMs?: number;
 	loopCount?: number;
+	maxLoops?: number;
 	error?: string;
-	/** Sub-steps within this step (for loop-group or parallel details) */
-	subSteps?: Array<{
-		agent: string;
-		status: "pending" | "running" | "done" | "failed";
-		detail?: string;
-	}>;
+	/** Sub-steps within this step */
+	subSteps?: WorkflowSubStepWidgetState[];
 }
 
 /**
@@ -280,7 +279,6 @@ export interface WorkflowWidgetState {
 	status: "running" | "done" | "failed" | "cancelled";
 	toolCount?: number;
 	tokenCount?: number;
-	/** ISO timestamp of last update */
 	updatedAt: string;
 }
 
@@ -290,6 +288,9 @@ let _widgetState: WorkflowWidgetState | null = null;
 let _widgetAnimationTimer: ReturnType<typeof setInterval> | null = null;
 let _lastWidgetCtx: ExtensionCommandContext | null = null;
 
+/** Callback invoked when user presses Esc to cancel */
+let _onCancelWorkflow: (() => void) | null = null;
+
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const ANIMATION_MS = 80;
 
@@ -297,12 +298,18 @@ function spinnerFrame(): string {
 	return SPINNER[Math.floor(Date.now() / ANIMATION_MS) % SPINNER.length]!;
 }
 
-function formatDuration(ms: number): string {
+function formatDurationFull(ms: number): string {
 	if (ms < 1000) return `${ms}ms`;
 	if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
 	const m = Math.floor(ms / 60000);
 	const s = Math.floor((ms % 60000) / 1000);
 	return `${m}m${s}s`;
+}
+
+function formatTimeout(ms: number): string {
+	const m = Math.floor(ms / 60000);
+	const s = Math.floor((ms % 60000) / 1000);
+	return s > 0 ? `${m}m${s}s` : `${m}m`;
 }
 
 /**
@@ -312,8 +319,10 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 	const lines: string[] = [];
 	const elapsed = Date.now() - state.startedAt;
 
-	// Header
-	const modeLabel = state.mode === "full-auto" ? "全自动" : state.mode === "full-attended" ? "完全值守" : "值守";
+	// ── Header ──
+	const modeLabel = state.mode === "full-auto" ? "全自动模式"
+		: state.mode === "full-attended" ? "完全值守模式"
+		: "值守模式";
 	const glyph = state.status === "running"
 		? theme.fg("accent", spinnerFrame())
 		: state.status === "done"
@@ -321,72 +330,96 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 			: state.status === "failed"
 				? theme.fg("error", "✗")
 				: theme.fg("warning", "■");
-	lines.push(`${glyph} ${bold(theme, "工作流")} ${theme.fg("dim", `· ${modeLabel} · ${formatDuration(elapsed)}`)}`);
+	lines.push(`${glyph} ${bold(theme, "工作流")} · ${dim(theme, modeLabel)} · ${dim(theme, formatDurationFull(elapsed))}`);
 
-	// Step list
+	// ── Step list ──
 	for (let i = 0; i < state.steps.length; i++) {
 		const s = state.steps[i]!;
 		const isCurrent = i === state.currentStepIndex && state.status === "running";
+		const isDone = s.status === "done";
+		const isFailed = s.status === "failed";
+		const isRunning = s.status === "running" || isCurrent;
 
 		const icon =
-			s.status === "done" ? theme.fg("success", "✓") :
-			s.status === "running" ? theme.fg("accent", spinnerFrame()) :
-			s.status === "failed" ? theme.fg("error", "✗") :
+			isDone ? theme.fg("success", "✓") :
+			isRunning ? theme.fg("accent", spinnerFrame()) :
+			isFailed ? theme.fg("error", "✗") :
 			s.status === "skipped" ? theme.fg("warning", "⏭") :
-			theme.fg("dim", "◦");
+			dim(theme, "◦");
 
-		const dur = s.durationMs != null ? ` ${theme.fg("dim", `(${formatDuration(s.durationMs)})`)}` : "";
-		const loop = s.loopCount && s.loopCount > 1 ? ` ${theme.fg("dim", `x${s.loopCount}`)}` : "";
-		const marker = isCurrent ? `${theme.fg("accent", "▶")}` : " ";
-		const label = truncateToWidth(s.label, Math.max(10, width - 10));
-		lines.push(` ${marker} ${icon} ${label}${dur}${loop}`);
+		const dur = s.durationMs != null ? dim(theme, ` (${formatDurationFull(s.durationMs)}`) : "";
+		const timeout = s.timeoutMs ? dim(theme, `/超时时间${formatTimeout(s.timeoutMs)}`) : "";
+		const durClose = s.durationMs != null ? dim(theme, ")") : "";
+		const loop = s.loopCount && s.loopCount > 0
+			? dim(theme, ` · 第 ${s.loopCount} 次循环`)
+			: "";
+		const marker = isCurrent ? theme.fg("accent", "▶") : " ";
 
-		// Error detail if failed
-		if (s.status === "failed" && s.error && expanded) {
-			const errWrapped = wrapTextWithAnsi(`  ${theme.fg("error", `⎿  ${s.error}`)}`, width - 2);
-			for (const el of errWrapped) {
-				lines.push(`  ${el}`);
-			}
-		}
+		const labelColor = isRunning ? theme.fg("accent", s.label) : isDone ? theme.fg("success", s.label) : isFailed ? theme.fg("error", s.label) : s.label;
+		lines.push(` ${marker} ${icon} ${labelColor}${dur}${timeout}${durClose}${loop}`);
 
-		// Sub-steps (parallel agents, loop iterations)
-		if (s.subSteps && (expanded || isCurrent)) {
+		// ── Sub-steps (agents) ──
+		if (s.subSteps && (expanded || isRunning)) {
 			for (const sub of s.subSteps) {
 				const subIcon =
 					sub.status === "done" ? theme.fg("success", "✓") :
 					sub.status === "running" ? theme.fg("accent", spinnerFrame()) :
 					sub.status === "failed" ? theme.fg("error", "✗") :
-					theme.fg("dim", "◦");
-				const subLabel = truncateToWidth(sub.agent, Math.max(8, width - 16));
-				const detail = sub.detail ? ` ${theme.fg("dim", sub.detail)}` : "";
-				lines.push(`   ${subIcon} ${subLabel}${detail}`);
-			}
-		}
+					dim(theme, "◦");
 
-		// Running step detail (expanded only)
-		if (isCurrent && expanded && s.subSteps) {
-			for (const sub of s.subSteps) {
-				if (sub.status === "running" && sub.detail) {
-					const actWrapped = wrapTextWithAnsi(`     ${theme.fg("dim", `⎿  ${sub.detail}`)}`, width - 4);
-					for (const el of actWrapped) {
-						lines.push(`  ${el}`);
+				const subDur = sub.durationMs != null ? dim(theme, ` ${formatDurationFull(sub.durationMs)}`) : "";
+				const subToken = sub.tokenCount ? dim(theme, ` · ${sub.tokenCount} tokens`) : "";
+				const subToolCount = sub.toolCount ? dim(theme, ` · ${sub.toolCount} tools`) : "";
+
+				lines.push(`   ${subIcon} ${dim(theme, "|__")} ${sub.agent}${subDur}${subToken}${subToolCount}`);
+
+				// Tool details (expanded only)
+				if (expanded && sub.tools && sub.tools.length > 0) {
+					for (const tool of sub.tools) {
+						lines.push(`      ${dim(theme, `|   ${tool}`)}`);
+					}
+				}
+
+				// Output paths
+				if (sub.outputs && sub.outputs.length > 0) {
+					const outIcon = sub.status === "done" ? theme.fg("success", "|__") : dim(theme, "|__");
+					for (const out of sub.outputs) {
+						lines.push(`      ${dim(theme, `${outIcon} output: ${out}`)}`);
+					}
+				}
+
+				// Free-form detail
+				if (expanded && sub.detail) {
+					for (const detailLine of sub.detail.split("\n")) {
+						lines.push(`        ${dim(theme, detailLine)}`);
 					}
 				}
 			}
 		}
+
+		// Error detail (expanded only)
+		if (isFailed && s.error && expanded) {
+			for (const errLine of s.error.split("\n")) {
+				lines.push(`    ${theme.fg("error", errLine)}`);
+			}
+		}
 	}
 
-	// Stats
+	// ── Stats line ──
 	const stats: string[] = [];
 	if (state.toolCount) stats.push(`${state.toolCount} tools`);
 	if (state.tokenCount) stats.push(`${state.tokenCount} tokens`);
 	if (stats.length > 0) {
-		lines.push(` ${theme.fg("dim", stats.join(" · "))}`);
+		lines.push(` ${dim(theme, stats.join(" · "))}`);
 	}
 
-	// Ctrl+O hint
-	if (!expanded && state.status === "running") {
-		lines.push(` ${theme.fg("accent", "Ctrl+O 展开详情")}`);
+	// ── Footer hints ──
+	if (state.status === "running") {
+		if (!expanded) {
+			lines.push(` ${theme.fg("accent", "Ctrl+O 展开详情")} ${dim(theme, "|")} ${theme.fg("warning", "Esc/Ctrl+C 取消")}`);
+		} else {
+			lines.push(` ${dim(theme, "Ctrl+O 折叠详情")} ${dim(theme, "|")} ${theme.fg("warning", "Esc/Ctrl+C 取消")}`);
+		}
 	}
 
 	return lines;
@@ -396,10 +429,10 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
  * Build the widget component factory for the current state.
  * Returns a factory function (tui, theme) => Component, as required by ctx.ui.setWidget().
  */
-function buildWidgetFactory(state: WorkflowWidgetState): (_tui: unknown, theme: Theme) => Component {
+function buildWidgetFactory(state: WorkflowWidgetState, expanded: boolean): (_tui: unknown, theme: Theme) => Component {
 	return (_tui, theme) => {
 		const width = process.stdout.columns || 120;
-		const lines = buildWidgetLines(state, theme, false, width);
+		const lines = buildWidgetLines(state, theme, expanded, width);
 
 		const container = new Container();
 		const box = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
@@ -425,7 +458,6 @@ export function updateWorkflowWidget(
 	if (!ctx.hasUI) return;
 
 	if (!state) {
-		// Remove widget
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
 		stopWidgetAnimation();
 		_widgetState = null;
@@ -437,7 +469,7 @@ export function updateWorkflowWidget(
 	_lastWidgetCtx = ctx;
 
 	const expanded = ctx.ui.getToolsExpanded?.() ?? false;
-	ctx.ui.setWidget(WIDGET_KEY, buildWidgetFactory(state));
+	ctx.ui.setWidget(WIDGET_KEY, buildWidgetFactory(state, expanded));
 
 	if (state.status === "running") {
 		startWidgetAnimation();
@@ -457,7 +489,7 @@ function startWidgetAnimation(): void {
 			const expanded = _lastWidgetCtx.ui.getToolsExpanded?.() ?? false;
 			_lastWidgetCtx.ui.setWidget(
 				WIDGET_KEY,
-				buildWidgetFactory(_widgetState),
+				buildWidgetFactory(_widgetState, expanded),
 			);
 			_lastWidgetCtx.ui.requestRender?.();
 		} catch {
@@ -474,6 +506,18 @@ function stopWidgetAnimation(): void {
 	}
 }
 
+/** Register a cancel callback triggered by Esc in the widget */
+export function setWorkflowCancelCallback(fn: (() => void) | null): void {
+	_onCancelWorkflow = fn;
+}
+
+/** Trigger workflow cancellation */
+export function cancelWorkflow(): void {
+	_onCancelWorkflow?.();
+}
+
+// ── Send workflow result to session ──────────────────────────
+
 /**
  * Send a workflow completion message to the session for persistence.
  */
@@ -481,26 +525,57 @@ export function sendWorkflowResult(
 	pi: ExtensionAPI,
 	state: WorkflowWidgetState,
 	prompt: string,
+	workflowType?: string,
 ): void {
-	const totalDur = formatDuration(Date.now() - state.startedAt);
+	const totalDur = formatDurationFull(Date.now() - state.startedAt);
 	const doneCount = state.steps.filter(s => s.status === "done" || s.status === "skipped").length;
 	const failedCount = state.steps.filter(s => s.status === "failed").length;
+	const total = state.steps.length;
 
 	const resultIcon = state.status === "done" ? "🎉" : state.status === "failed" ? "❌" : "⏹️";
 	const statusText = state.status === "done" ? "全部完成" : state.status === "failed" ? "部分失败" : "已取消";
 
-	const stepSummary = state.steps.map((s, i) => {
-		const icon = s.status === "done" ? "✅" : s.status === "failed" ? "❌" : s.status === "skipped" ? "⏭️" : "⬜";
-		return `${icon} **${s.label}**${s.status === "failed" && s.error ? ` — ${s.error}` : ""}`;
-	}).join("\n");
+	// Build step summary with sub-step details
+	const stepSummaryParts: string[] = [];
+	for (const s of state.steps) {
+		const icon = s.status === "done" ? "✅" :
+			s.status === "failed" ? "❌" :
+			s.status === "skipped" ? "⏭️" : "⬜";
+		const durSuffix = s.durationMs != null ? ` (${formatDurationFull(s.durationMs)})` : "";
+		const loopSuffix = s.loopCount && s.loopCount > 1 ? ` x${s.loopCount}` : "";
+		const errSuffix = s.status === "failed" && s.error ? ` — ${s.error}` : "";
+
+		stepSummaryParts.push(`${icon} **${s.label}**${durSuffix}${loopSuffix}${errSuffix}`);
+
+		// Sub-step details
+		if (s.subSteps && s.subSteps.length > 0) {
+			for (const sub of s.subSteps) {
+				const subIcon = sub.status === "done" ? "  ✓" : sub.status === "failed" ? "  ✗" : "  ◦";
+				const subDetail = sub.detail ? ` — ${sub.detail}` : "";
+				stepSummaryParts.push(`   ${subIcon} ${sub.agent}${subDetail}`);
+				if (sub.outputs && sub.outputs.length > 0) {
+					for (const out of sub.outputs) {
+						stepSummaryParts.push(`     ⎿  output: \`${out}\``);
+					}
+				}
+			}
+		}
+	}
+
+	// Summary title
+	const modeLabel = state.mode === "full-auto" ? "全自动" : state.mode === "full-attended" ? "完全值守" : "值守";
+	const typeLabel = workflowType ? ` - ${workflowType}` : "";
 
 	const body = [
+		`[dev-workflow-result${typeLabel}]`,
+		"",
 		`${resultIcon} **工作流${statusText}** (${totalDur})`,
 		"",
-		stepSummary,
+		stepSummaryParts.join("\n"),
 		"",
-		`完成 ${doneCount}/${state.steps.length} 步${failedCount > 0 ? `，${failedCount} 步失败` : ""}`,
+		`完成 ${doneCount}/${total} 步${failedCount > 0 ? `，${failedCount} 步失败` : ""}`,
 		state.toolCount ? `\n工具调用: ${state.toolCount} 次` : "",
+		state.tokenCount ? `\nToken: ${state.tokenCount}` : "",
 	].join("\n");
 
 	try {
@@ -512,6 +587,7 @@ export function sendWorkflowResult(
 				status: state.status,
 				steps: state.steps,
 				durationMs: Date.now() - state.startedAt,
+				workflowType,
 				prompt,
 			},
 		});
@@ -523,17 +599,11 @@ export function sendWorkflowResult(
 // ── Dynamic progress update ──────────────────────────────────
 
 /**
- * Helper to build WorkflowWidgetState from WorkflowStepDef array + runtime states.
+ * Helper to build WorkflowWidgetState from step states.
  */
 export function buildWidgetState(
 	mode: string,
-	steps: Array<{
-		label: string;
-		status: "pending" | "running" | "done" | "failed" | "skipped";
-		durationMs?: number;
-		loopCount?: number;
-		error?: string;
-	}>,
+	steps: WorkflowStepWidgetState[],
 	currentStepIndex: number,
 	startedAt: number,
 	status: WorkflowWidgetState["status"],
@@ -552,7 +622,7 @@ export function buildWidgetState(
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Extension factory (no-op — ui-helpers is a helper module, not a standalone extension)
+//  Extension factory (no-op — ui-helpers is a helper module)
 // ═══════════════════════════════════════════════════════════════
 
 export default function (_pi: ExtensionAPI) {

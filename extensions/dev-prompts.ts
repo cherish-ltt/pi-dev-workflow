@@ -567,7 +567,7 @@ async function promptWorkflowDecision(
 
 	if (choice.startsWith("1")) {
 		saveAnswerFile(ctx.cwd, finalPrompt);
-		await runWorkflow(ctx, pi, finalPrompt, { steps: defaultSteps });
+		await runWorkflow(ctx, pi, finalPrompt, { steps: defaultSteps }, "快速链式");
 		return true;
 	}
 
@@ -597,7 +597,7 @@ async function promptWorkflowDecision(
 	}
 
 	saveAnswerFile(ctx.cwd, finalPrompt);
-	await runWorkflow(ctx, pi, finalPrompt, { steps: customSteps });
+	await runWorkflow(ctx, pi, finalPrompt, { steps: customSteps }, "自定义");
 	return true;
 }
 
@@ -965,7 +965,7 @@ export default function (pi: ExtensionAPI) {
 			if (!cp) {
 				return;
 			}
-			await runWorkflow(ctx, pi, cp.prompt, { steps: FEAT_WORKFLOW_STEPS });
+			await runWorkflow(ctx, pi, cp.prompt, { steps: FEAT_WORKFLOW_STEPS }, "恢复");
 		},
 	});
 }
