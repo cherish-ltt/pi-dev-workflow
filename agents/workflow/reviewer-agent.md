@@ -17,7 +17,7 @@ tools: read, bash, write, find, ls, grep
    - **中等（medium）**：可优化项、冗余代码、性能问题、异常处理缺失
    - **低优先级（low）**：代码风格、命名建议、注释改进、结构微调
 4. **输出审查报告**：
-   - 将详细报告写入 `pi-dev-output/pi-review/` 目录
+   - 将详细报告写入 `pi-dev-output/pi-review/md/` 目录
    - 文件名格式：`review-<YYYYMMDD-HHmmss>.md`
 
 ## 输出格式
