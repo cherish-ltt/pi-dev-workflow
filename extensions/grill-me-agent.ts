@@ -343,7 +343,7 @@ export async function runGrillPhase(
 	const confirmTitle = options?.title ?? "🔍 设计方案评审";
 	const confirmDesc = options?.description ?? "是否进入设计评审 (Grill) 模式？\nAI 会从架构、数据流、边界条件、安全等多个维度挑战你的设计。";
 	const qTitlePrefix = options?.questionTitle ?? "设计方案评审";
-	const loaderLabel = options?.loaderLabel ?? "🧠 AI 正在分析代码并生成评审问题...";
+	const loaderLabel = options?.loaderLabel ?? "🧠 AI 子代理正在分析代码并生成评审问题...";
 
 	// ── Step 1: Confirm entering grill mode ──────────────────
 	const enterGrill = await ctx.ui.confirm(confirmTitle, confirmDesc);
@@ -369,7 +369,11 @@ export async function runGrillPhase(
 			ctx.cwd,
 			loader.signal,
 			undefined,
-			(progress) => { loader.setText(`🧠 ${progress.slice(0, 60)}`); },
+			(progress) => {
+					// BorderedLoader 内部持有 Loader/CancellableLoader（私有 loader 字段），后者有 setText
+					const inner = (loader as unknown as { loader?: { setText?: (t: string) => void } }).loader;
+					inner?.setText?.(`🧠 ${progress.slice(0, 60)}`);
+				},
 		)
 			.then((result) => {
 				// Primary: read from file (sub-agent wrote via `write` tool)
