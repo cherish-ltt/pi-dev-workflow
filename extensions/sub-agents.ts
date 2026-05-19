@@ -554,17 +554,35 @@ export default function (pi: ExtensionAPI) {
 
 	// ── /subagent-stop - 主动终止所有正在运行的 sub-agent ──────
 	pi.registerCommand("subagent-stop", {
-		description: "Terminate all running sub-agents immediately",
+		description: "Terminate all running sub-agents immediately. Also cancels any active workflow.",
 		handler: async (_args, ctx) => {
-			const count = activeChildren.size;
-			if (count === 0) {
-				ctx.ui.notify("i️ 当前没有运行中的 sub-agent", "info");
+			const childCount = activeChildren.size;
+
+			// Also try to cancel any active workflow
+			let workflowCancelled = false;
+			try {
+				const { cancelActiveWorkflow, isWorkflowRunning } = await import("./workflow-engine");
+				if (isWorkflowRunning()) {
+					cancelActiveWorkflow();
+					workflowCancelled = true;
+				}
+			} catch { /* workflow-engine not available, ignore */ }
+
+			if (childCount === 0 && !workflowCancelled) {
+				ctx.ui.notify("i️ 当前没有运行中的 sub-agent 或工作流", "info");
 				return;
 			}
-			killAllChildren();
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			ctx.ui.notify(`🛑 已终止 ${count} 个 sub-agent 进程`, "warning");
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+
+			if (childCount > 0) {
+				killAllChildren();
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+				ctx.ui.notify(`🛑 已终止 ${childCount} 个 sub-agent 进程`, "warning");
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			}
+
+			if (workflowCancelled) {
+				ctx.ui.notify(`🛑 已取消运行中的工作流`, "warning");
+			}
 		},
 	});
 

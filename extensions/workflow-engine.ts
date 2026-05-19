@@ -21,6 +21,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { spawnSubagent, extractFinalOutput, discoverAgents, type AgentDef, type SubagentResult } from "./sub-agents";
 import {
 	uiSelect,
@@ -334,6 +335,10 @@ let _workflowType: string | undefined;
 let _workflowCwd = "";
 let _workflowPrompt = "";
 let _workflowPlanFileRelPath: string | undefined;
+/** Track loop counts at module level so cancel callback can save a proper checkpoint. */
+let _workflowLoopCounts: Record<string, number> = {};
+/** Original checkpoint creation timestamp, for preserving across cancel. */
+let _workflowCreatedAt: string = new Date().toISOString();
 
 let _widgetMode: WorkflowMode = "attended";
 let _widgetSteps: WorkflowStepWidgetState[] = [];
@@ -447,6 +452,49 @@ function cleanupWidget(): void {
 	}
 	_workflowAbortController = null;
 	setWorkflowCancelCallback(null);
+	// Clean up terminal input listener (Esc)
+	if (_terminalInputUnsubscribe) {
+		_terminalInputUnsubscribe();
+		_terminalInputUnsubscribe = null;
+	}
+	// Clean up signal handlers
+	cleanupSignalHandlers();
+}
+
+/** Unsubscribe function for terminal input listener (Esc to cancel) */
+let _terminalInputUnsubscribe: (() => void) | null = null;
+
+// ── Signal handling (SIGINT/SIGTERM) for graceful workflow cancellation ──
+
+let _signalHandlersRegistered = false;
+
+function cleanupSignalHandlers(): void {
+	if (!_signalHandlersRegistered) return;
+	try { process.removeListener("SIGINT", onSigint); } catch { /* ignore */ }
+	try { process.removeListener("SIGTERM", onSigterm); } catch { /* ignore */ }
+	_signalHandlersRegistered = false;
+}
+
+function onSigint(): void {
+	if (_workflowRunning && _workflowAbortController && !_workflowAbortController.signal.aborted) {
+		console.log("\n[workflow] SIGINT received, cancelling workflow...");
+		cancelWorkflow();
+	}
+}
+
+function onSigterm(): void {
+	if (_workflowRunning && _workflowAbortController && !_workflowAbortController.signal.aborted) {
+		cancelWorkflow();
+	}
+}
+
+function registerSignalHandlers(): void {
+	if (_signalHandlersRegistered) return;
+	try {
+		process.on("SIGINT", onSigint);
+		process.on("SIGTERM", onSigterm);
+		_signalHandlersRegistered = true;
+	} catch { /* ignore */ }
 }
 
 // ── Cancel handler ──
@@ -937,6 +985,8 @@ export async function runWorkflow(
 	_workflowCwd = ctx.cwd;
 	_workflowPrompt = prompt;
 	_workflowPlanFileRelPath = planFileRelPath;
+	_workflowLoopCounts = loopCounts;
+	_workflowCreatedAt = existingCp?.createdAt ?? new Date().toISOString();
 	_workflowType = workflowType;
 	_workflowPi = pi;
 
@@ -972,14 +1022,55 @@ export async function runWorkflow(
 				"cancelled",
 			);
 			updateWorkflowWidget(_lastWorkflowCtx, finalState);
-			// Archive checkpoint on cancel too
+
+			// ── Save final checkpoint before archiving ──
+			const cancelCp: CheckpointData = {
+				version: 1,
+				createdAt: _workflowCreatedAt,
+				updatedAt: new Date().toISOString(),
+				prompt: _workflowPrompt,
+				mode: _widgetMode,
+				steps: _widgetSteps.map(s => ({
+					status: s.status as WorkflowStepState["status"],
+					durationMs: s.durationMs,
+					loopCount: s.loopCount,
+					error: s.error,
+				})),
+				currentStepIndex: _widgetCurrentIdx,
+				loopCounts: { ..._workflowLoopCounts },
+				planFilePath: _workflowPlanFileRelPath,
+			};
+			saveCheckpoint(_workflowCwd, cancelCp);
+
+			// ── Send workflow result message for persistence ──
+			if (_workflowPi) {
+				sendWorkflowResult(_workflowPi, finalState, _workflowPrompt, _workflowType);
+			}
+
+			// ── Archive checkpoint on cancel too ──
 			archiveCheckpointFile(_workflowCwd, _workflowPlanFileRelPath);
-			setTimeout(() => cleanupWidget(), 3000);
+			setTimeout(() => cleanupWidget(), 5000);
 		}
 	});
 
 	// Collapse tools to show widget
 	ctx.ui.setToolsExpanded(false);
+
+	// ── Register terminal input handler (Esc to cancel) ──
+	if (ctx.hasUI) {
+		_terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
+			if (!matchesKey(data, Key.escape)) return undefined;
+			if (_workflowRunning && _workflowAbortController && !_workflowAbortController.signal.aborted) {
+				ctx.ui.notify("⏹️ 用户取消工作流", "warning");
+				cancelWorkflow();
+				return { consume: true };
+			}
+			return undefined;
+		});
+	}
+
+	// ── Register signal handlers (SIGINT/SIGTERM) for graceful shutdown ──
+	registerSignalHandlers();
 
 	// ── Launch background execution (fire-and-forget) ──
 	executeWorkflowBackground(
@@ -992,6 +1083,12 @@ export async function runWorkflow(
 		if (_lastWorkflowCtx) {
 			updateWorkflowWidget(_lastWorkflowCtx, null);
 		}
+		// Clean up terminal input listener and signal handlers
+		if (_terminalInputUnsubscribe) {
+			_terminalInputUnsubscribe();
+			_terminalInputUnsubscribe = null;
+		}
+		cleanupSignalHandlers();
 	});
 
 	// Return immediately - execution continues in background
@@ -1000,6 +1097,23 @@ export async function runWorkflow(
 // ═══════════════════════════════════════════════════════════════
 //  Extension factory (no-op — imported by dev-prompts.ts)
 // ═══════════════════════════════════════════════════════════════
+
+/**
+ * Check if a workflow is currently running.
+ */
+export function isWorkflowRunning(): boolean {
+	return _workflowRunning;
+}
+
+/**
+ * Cancel the active workflow, if any.
+ * Safe to call even when no workflow is running (no-op in that case).
+ */
+export function cancelActiveWorkflow(): void {
+	if (_workflowRunning && _workflowAbortController && !_workflowAbortController.signal.aborted) {
+		cancelWorkflow();
+	}
+}
 
 export default function (_pi: ExtensionAPI) {
 	// workflow-engine is a helper module, not a standalone extension.
