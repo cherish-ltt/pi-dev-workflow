@@ -851,6 +851,7 @@ export default function (pi: ExtensionAPI) {
 					questionTitle: "Bug 根因分析",
 					loaderLabel: "🧠 AI 正在分析代码并生成根因评审问题...",
 				},
+				{ steps: FIX_WORKFLOW_STEPS },
 			);
 		},
 	});
