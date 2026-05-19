@@ -288,6 +288,11 @@ let _widgetState: WorkflowWidgetState | null = null;
 let _widgetAnimationTimer: ReturnType<typeof setInterval> | null = null;
 let _lastWidgetCtx: ExtensionCommandContext | null = null;
 
+/** Independent expanded state for the widget's sub-agent details (Ctrl+O toggles this) */
+let _widgetExpanded = false;
+/** Previous tools expanded state for detecting Ctrl+O in animation loop */
+let _prevToolsExpanded = false;
+
 /** Callback invoked when user presses Esc to cancel */
 let _onCancelWorkflow: (() => void) | null = null;
 
@@ -359,7 +364,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 		lines.push(` ${marker} ${icon} ${labelColor}${dur}${timeout}${durClose}${loop}`);
 
 		// ── Sub-steps (agents) ──
-		if (s.subSteps && (expanded || isRunning)) {
+		// Sub-steps are only shown for the currently running step
+		if (s.subSteps && isRunning) {
 			for (const sub of s.subSteps) {
 				const subIcon =
 					sub.status === "done" ? theme.fg("success", "✓") :
@@ -373,14 +379,14 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 
 				lines.push(`   ${subIcon} ${dim(theme, "|__")} ${sub.agent}${subDur}${subToken}${subToolCount}`);
 
-				// Tool details (expanded only)
-				if (expanded && sub.tools && sub.tools.length > 0) {
+				// Tool details: only for the current step when Ctrl+O expanded
+				if (isCurrent && expanded && sub.tools && sub.tools.length > 0) {
 					for (const tool of sub.tools) {
 						lines.push(`      ${dim(theme, `|   ${tool}`)}`);
 					}
 				}
 
-				// Output paths
+				// Output paths (always shown for done/running sub-steps)
 				if (sub.outputs && sub.outputs.length > 0) {
 					const outIcon = sub.status === "done" ? theme.fg("success", "|__") : dim(theme, "|__");
 					for (const out of sub.outputs) {
@@ -388,8 +394,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 					}
 				}
 
-				// Free-form detail
-				if (expanded && sub.detail) {
+				// Free-form detail (only for current step when expanded)
+				if (isCurrent && expanded && sub.detail) {
 					for (const detailLine of sub.detail.split("\n")) {
 						lines.push(`        ${dim(theme, detailLine)}`);
 					}
@@ -427,22 +433,56 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 
 /**
  * Build the widget component factory for the current state.
- * Returns a factory function (tui, theme) => Component, as required by ctx.ui.setWidget().
+ * Returns a factory function (tui, theme) => Component with handleInput support.
+ * handleInput intercepts Ctrl+O to toggle the widget's internal expanded state
+ * (showing/hiding sub-agent details without affecting the main tools panel).
  */
-function buildWidgetFactory(state: WorkflowWidgetState, expanded: boolean): (_tui: unknown, theme: Theme) => Component {
+function buildWidgetFactory(state: WorkflowWidgetState, expanded: boolean): (_tui: unknown, theme: Theme) => Component & { handleInput?: (data: string) => void } {
 	return (_tui, theme) => {
-		const width = process.stdout.columns || 120;
-		const lines = buildWidgetLines(state, theme, expanded, width);
+		// Current expanded for this factory instance
+		let currentExpanded = expanded;
 
-		const container = new Container();
-		const box = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
-		const inner = new Container();
-		for (const line of lines) {
-			inner.addChild(new Text(` ${line}`, 1, 0));
-		}
-		box.addChild(inner);
-		container.addChild(box);
-		return container;
+		return {
+			render: (width: number) => {
+				const w = width || process.stdout.columns || 120;
+				const lines = buildWidgetLines(state, theme, currentExpanded, w);
+
+				// Build the visual output with box styling
+				// We return string[] directly here instead of using pi-tui Container
+				// to keep the render inline with the expanded state
+				const innerW = Math.max(1, w - 2);
+				const border = "─".repeat(innerW);
+				const result: string[] = [theme.bg("toolPendingBg", ` ${border} `)];
+				for (const line of lines) {
+					const t = truncateToWidth(` ${line}`, w, "");
+					result.push(theme.bg("toolPendingBg", t));
+				}
+				result.push(theme.bg("toolPendingBg", ` ${border} `));
+				return result;
+			},
+			invalidate: () => {},
+			handleInput: (data: string) => {
+				// Ctrl+O toggles sub-agent detail level
+				if (typeof data === "string" && data === "\x0f") {
+					currentExpanded = !currentExpanded;
+					_widgetExpanded = currentExpanded;
+					// Request re-render — next call to render() will use new expanded state
+					if (_lastWidgetCtx) {
+						// Update the widget with the new expanded state
+						_lastWidgetCtx.ui.setWidget(
+							WIDGET_KEY,
+							buildWidgetFactory(state, currentExpanded),
+						);
+						_lastWidgetCtx.ui.requestRender?.();
+					}
+					return; // Don't propagate to default handler
+				}
+				// Esc cancels the workflow
+				if (typeof data === "string" && data === "\x1b") {
+					_onCancelWorkflow?.();
+				}
+			},
+		};
 	};
 }
 
@@ -467,9 +507,10 @@ export function updateWorkflowWidget(
 
 	_widgetState = state;
 	_lastWidgetCtx = ctx;
+	_prevToolsExpanded = ctx.ui.getToolsExpanded?.() ?? false;
 
-	const expanded = ctx.ui.getToolsExpanded?.() ?? false;
-	ctx.ui.setWidget(WIDGET_KEY, buildWidgetFactory(state, expanded));
+	// Use the widget's own expanded state (or initialize to false)
+	ctx.ui.setWidget(WIDGET_KEY, buildWidgetFactory(state, _widgetExpanded));
 
 	if (state.status === "running") {
 		startWidgetAnimation();
@@ -486,10 +527,19 @@ function startWidgetAnimation(): void {
 			return;
 		}
 		try {
-			const expanded = _lastWidgetCtx.ui.getToolsExpanded?.() ?? false;
+			// Detect Ctrl+O from tools panel state change (fallback if handleInput not supported)
+			const toolsExpanded = _lastWidgetCtx.ui.getToolsExpanded?.() ?? false;
+			if (toolsExpanded !== _prevToolsExpanded) {
+				// User pressed Ctrl+O — capture the toggle for our widget
+				_widgetExpanded = toolsExpanded;
+				// Collapse tools panel immediately — update prev to prevent re-trigger
+				_lastWidgetCtx.ui.setToolsExpanded(false);
+				_prevToolsExpanded = false;
+			}
+
 			_lastWidgetCtx.ui.setWidget(
 				WIDGET_KEY,
-				buildWidgetFactory(_widgetState, expanded),
+				buildWidgetFactory(_widgetState, _widgetExpanded),
 			);
 			_lastWidgetCtx.ui.requestRender?.();
 		} catch {
