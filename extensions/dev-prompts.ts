@@ -27,16 +27,17 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { runGrillPhase, runPRDPhase, saveAnswerFile, recoverFromBackup, type GrillOptions } from "./grill-me-agent";
 import { discoverAgents } from "./sub-agents";
 import { runWorkflow, loadCheckpointFromFile, type WorkflowStepDef } from "./workflow-engine";
+import { uiSelect, uiConfirm, uiInput } from "./ui-helpers";
 
 // ── Helpers ──────────────────────────────────────────────────
 
-/** Ask a single question. Returns `undefined` on cancel (Esc). */
+/** Ask a single question with proper wrapping. Returns `undefined` on cancel (Esc). */
 async function ask(
 	ctx: ExtensionCommandContext,
 	label: string,
 	placeholder: string,
 ): Promise<string | undefined> {
-	return ctx.ui.input(label, { placeholder, required: false });
+	return uiInput(ctx, label, placeholder);
 }
 
 /** Check if a field value is empty or explicitly "无". */
@@ -363,14 +364,13 @@ const _perfGrillAgent = discoverAgents().find(a => a.name === "dev-perf-grill-ag
 
 // ── Workflow configurations ──────────────────────────────────
 
-/** /dev-feat workflo: planner -> {worker->reviewer} -> {trimmer->reviewer} -> [docWriter] */
 const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	{
 		id: "planner",
 		label: "📋 生成实施计划",
 		type: "auto",
 		agentName: "planner",
-		timeoutMs: 900_000, // 15 min
+		timeoutMs: 900_000,
 	},
 	{
 		id: "worker-reviewer",
@@ -379,7 +379,7 @@ const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "worker",
 		reviewAgentName: "reviewer",
 		maxLoops: 3,
-		timeoutMs: 900_000, // 15 min
+		timeoutMs: 900_000,
 	},
 	{
 		id: "trimmer-reviewer",
@@ -388,18 +388,17 @@ const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "trimmer",
 		reviewAgentName: "reviewer",
 		maxLoops: 3,
-		timeoutMs: 300_000, // 5 min
+		timeoutMs: 300_000,
 	},
 	{
 		id: "docWriter",
 		label: "📝 更新文档",
 		type: "confirm",
 		agentName: "docWriter",
-		timeoutMs: 300_000, // 5 min
+		timeoutMs: 300_000,
 	},
 ];
 
-/** /dev-fix: planner -> {worker->reviewer} -> [docWriter] */
 const FIX_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	{
 		id: "planner",
@@ -426,7 +425,6 @@ const FIX_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	},
 ];
 
-/** /dev-refactor: planner -> {worker->reviewer} -> {trimmer->reviewer} */
 const REFACTOR_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	{
 		id: "planner",
@@ -455,7 +453,6 @@ const REFACTOR_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	},
 ];
 
-/** /dev-perf: planner -> {worker->reviewer} */
 const PERF_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	{
 		id: "planner",
@@ -475,7 +472,6 @@ const PERF_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	},
 ];
 
-/** /dev-test: planner -> {worker->reviewer} */
 const TEST_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	{
 		id: "planner",
@@ -495,7 +491,6 @@ const TEST_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	},
 ];
 
-/** /dev-doc: planner -> docWriter */
 const DOC_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	{
 		id: "planner",
@@ -513,7 +508,6 @@ const DOC_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	},
 ];
 
-/** /dev-style: trimmer -> reviewer */
 const STYLE_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	{
 		id: "trimmer-reviewer",
@@ -526,7 +520,6 @@ const STYLE_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	},
 ];
 
-/** /dev-security: reviewer */
 const SECURITY_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	{
 		id: "reviewer",
@@ -539,10 +532,6 @@ const SECURITY_WORKFLOW_STEPS: WorkflowStepDef[] = [
 
 // ── Command runner ───────────────────────────────────────────
 
-/**
- * Run a wizard with an optional Grill phase:
- * Wizard → Assemble → (Grill?) → Send
- */
 /** Format workflow steps into a readable list. */
 function formatWorkflowSteps(steps: WorkflowStepDef[]): string {
 	return steps.map((s, i) => `${i + 1}. ${s.label}`).join("\n");
@@ -550,11 +539,6 @@ function formatWorkflowSteps(steps: WorkflowStepDef[]): string {
 
 /**
  * Prompt user to choose workflow mode and optionally customize sub-agent chain.
- *
- * Displays a 3-option menu:
- *   1. Use the default built-in chain (predefined workflow steps)
- *   2. Customize: select/deselect steps and set per-step timeout
- *   3. Skip workflow, send prompt directly to main agent
  *
  * Returns true if workflow was started and handled (caller should return immediately).
  * Returns false if caller should fall through to direct prompt sending.
@@ -567,12 +551,8 @@ async function promptWorkflowDecision(
 ): Promise<boolean> {
 	if (!defaultSteps || defaultSteps.length === 0) return false;
 
-	ctx.ui.notify(
-		`📋 默认工作流步骤:\n${formatWorkflowSteps(defaultSteps)}`,
-		"info",
-	);
-
-	const choice = await ctx.ui.select(
+	const choice = await uiSelect(
+		ctx,
 		"🚀 选择工作流模式",
 		[
 			"1. 使用默认链式子代理（推荐）",
@@ -592,19 +572,19 @@ async function promptWorkflowDecision(
 	}
 
 	// ── Custom mode: let user pick steps and set timeouts ──
-	ctx.ui.notify("🛠️ 请逐项选择需要包含的工作流步骤（可单独设置超时时间）", "info");
-
 	const customSteps: WorkflowStepDef[] = [];
 	for (const step of defaultSteps) {
-		const include = await ctx.ui.confirm(
+		const include = await uiConfirm(
+			ctx,
 			`📌 ${step.label}`,
-			`是否包含此步骤？\n\n类型: ${step.type}\n默认超时: ${(step.timeoutMs / 60000).toFixed(0)} 分钟`,
+			`类型: ${step.type}\n默认超时: ${(step.timeoutMs / 60000).toFixed(0)} 分钟`,
 		);
 		if (!include) continue;
 
-		const timeoutStr = await ctx.ui.input(
+		const timeoutStr = await uiInput(
+			ctx,
 			`⏱️ ${step.label} - 超时时间(分钟)`,
-			{ placeholder: `留空保持默认 (${(step.timeoutMs / 60000).toFixed(0)} 分钟)`, required: false },
+			`留空保持默认 (${(step.timeoutMs / 60000).toFixed(0)} 分钟)`,
 		);
 		customSteps.push({
 			...step,
@@ -613,14 +593,9 @@ async function promptWorkflowDecision(
 	}
 
 	if (customSteps.length === 0) {
-		ctx.ui.notify("⚠️ 未选择任何步骤，将直接发送 prompt", "warning");
 		return false;
 	}
 
-	ctx.ui.notify(
-		`✅ 自定义工作流已创建 (${customSteps.length} 个步骤):\n${formatWorkflowSteps(customSteps)}`,
-		"success",
-	);
 	saveAnswerFile(ctx.cwd, finalPrompt);
 	await runWorkflow(ctx, pi, finalPrompt, { steps: customSteps });
 	return true;
@@ -636,13 +611,10 @@ async function runWizardWithGrill(
 	grillOptions?: GrillOptions,
 	workflowConfig?: { steps: WorkflowStepDef[] },
 ): Promise<void> {
-	ctx.ui.notify(`📋 /dev-${type} — ${label}，请逐项填写以下信息（留空跳过对应段落，Esc 取消）`, "info");
-
 	const answers: Record<string, string> = {};
 	for (const q of questions) {
 		const val = await ask(ctx, q.label, q.placeholder);
 		if (val === undefined) {
-			ctx.ui.notify("❌ 已取消", "warning");
 			return;
 		}
 		answers[q.key] = val;
@@ -661,7 +633,6 @@ async function runWizardWithGrill(
 			loaderLabel: grillOptions.loaderLabel,
 		});
 		if (grillResult.cancelled) {
-			ctx.ui.notify("❌ 操作已取消", "warning");
 			return;
 		}
 		finalPrompt = grillResult.enhancedPrompt;
@@ -675,31 +646,19 @@ async function runWizardWithGrill(
 
 	// ── Guard & persist before sending ──────────────────────
 	if (!finalPrompt) {
-		ctx.ui.notify("⚠️ 最终提示词为空，正在尝试从备份文件恢复...", "warning");
 		const recovered = recoverFromBackup(ctx.cwd);
 		if (recovered) {
 			finalPrompt = recovered;
-			ctx.ui.notify("✅ 已从备份文件恢复提示词内容", "success");
 		} else {
-			ctx.ui.notify("❌ 错误：最终提示词为空且无可用备份，无法发送", "error");
 			return;
 		}
 	}
 	const answerPath = saveAnswerFile(ctx.cwd, finalPrompt);
-
-	ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
 	pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
-	ctx.ui.notify(`📝 /dev-${type} 提示词已投递，主代理正在处理。备份: ${answerPath}`, "info");
 }
 
 /**
  * Run a wizard: ask questions, assemble prompt, send to agent.
- * @param ctx     Command context
- * @param pi      Extension API (for sendUserMessage)
- * @param type    Display name of the prompt type (e.g. "feat")
- * @param label   Friendly label (e.g. "新功能/创意生成")
- * @param questions  Array of [label, placeholder] pairs
- * @param assembler  Function that takes answers and returns the prompt string
  */
 async function runWizard(
 	ctx: ExtensionCommandContext,
@@ -710,14 +669,11 @@ async function runWizard(
 	assembler: (answers: Record<string, string>) => string,
 	workflowConfig?: { steps: WorkflowStepDef[] },
 ): Promise<void> {
-	ctx.ui.notify(`📋 /dev-${type} — ${label}，请逐项填写以下信息（留空跳过对应段落，Esc 取消）`, "info");
-
 	const answers: Record<string, string> = {};
 
 	for (const q of questions) {
 		const val = await ask(ctx, q.label, q.placeholder);
 		if (val === undefined) {
-			ctx.ui.notify("❌ 已取消", "warning");
 			return;
 		}
 		answers[q.key] = val;
@@ -736,9 +692,6 @@ async function runWizard(
 
 	// Send the assembled prompt to the main agent
 	pi.sendUserMessage(prompt, { deliverAs: "followUp" });
-
-	// Also show the prompt in a notification for reference
-	ctx.ui.notify(`📝 /dev-${type} 提示词已投递，主代理正在处理`, "info");
 }
 
 // ── Questions for each command ────────────────────────────────
@@ -833,57 +786,39 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("dev-feat", {
 		description: "(prompt wizard) 新功能/创意生成 — 支持设计评审 (Grill) + 自动化工作流",
 		handler: async (_args, ctx) => {
-			// ── Phase 1: Wizard ──────────────────────────────────
-			ctx.ui.notify("📋 /dev-feat — 新功能/创意生成，请逐项填写以下信息（留空跳过对应段落，Esc 取消）", "info");
-
 			const answers: Record<string, string> = {};
 			for (const q of FEAT_QUESTIONS) {
 				const val = await ask(ctx, q.label, q.placeholder);
 				if (val === undefined) {
-					ctx.ui.notify("❌ 已取消", "warning");
 					return;
 				}
 				answers[q.key] = val;
 			}
 
-			// ── Phase 2: Assemble base prompt ───────────────────
 			const basePrompt = assembleFeatPrompt(answers as FeatFields);
-			ctx.ui.notify(`✅ 基本信息已收集，共 ${FEAT_QUESTIONS.length} 项`, "success");
 
-			// ── Phase 3: Grill (设计评审) ───────────────────────
 			const grillResult = await runGrillPhase(basePrompt, ctx);
 			if (grillResult.cancelled) {
-				ctx.ui.notify("❌ 操作已取消", "warning");
 				return;
 			}
 			const finalPrompt = grillResult.enhancedPrompt;
 
-			// ── Phase 4: Workflow decision ─────────────────
 			if (FEAT_WORKFLOW_STEPS.length > 0) {
 				const handled = await promptWorkflowDecision(ctx, pi, finalPrompt, FEAT_WORKFLOW_STEPS);
 				if (handled) return;
 			}
 
-			// ── Legacy: Send to main agent ──────────────────────
 			if (!finalPrompt) {
-				ctx.ui.notify("⚠️ 最终提示词为空，正在尝试从备份文件恢复...", "warning");
 				const recovered = recoverFromBackup(ctx.cwd);
 				if (recovered) {
-					ctx.ui.notify("✅ 已从备份文件恢复提示词内容", "success");
 					const answerPath = saveAnswerFile(ctx.cwd, recovered);
-					ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
 					pi.sendUserMessage(recovered, { deliverAs: "followUp" });
-					ctx.ui.notify(`📝 /dev-feat 提示词已投递（恢复自备份），主代理正在处理。备份: ${answerPath}`, "info");
-					return;
-				} else {
-					ctx.ui.notify("❌ 错误：最终提示词为空且无可用备份，无法发送", "error");
 					return;
 				}
+				return;
 			}
 			const answerPath = saveAnswerFile(ctx.cwd, finalPrompt);
-			ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
 			pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
-			ctx.ui.notify(`📝 /dev-feat 提示词已投递，主代理正在处理。备份: ${answerPath}`, "info");
 		},
 	});
 
@@ -897,7 +832,7 @@ export default function (pi: ExtensionAPI) {
 				{
 					agentDef: _fixGrillAgent,
 					title: "🐛 Bug 根因分析评审",
-					description: "是否进入 Bug 根因分析评审 (Grill) 模式？\nAI 会从复现条件、根因推理、修复方案、回归风险等维度挑战你的理解。",
+					description: "AI 会从复现条件、根因推理、修复方案、回归风险等维度挑战你的理解。",
 					questionTitle: "Bug 根因分析",
 					loaderLabel: "🧠 AI 正在分析代码并生成根因评审问题...",
 				},
@@ -916,7 +851,7 @@ export default function (pi: ExtensionAPI) {
 				{
 					agentDef: _docGrillAgent,
 					title: "📄 文档大纲评审",
-					description: "是否进入文档大纲评审 (Grill) 模式？\nAI 会从受众定位、结构安排、示例选择等维度审视你的文档计划。",
+					description: "AI 会从受众定位、结构安排、示例选择等维度审视你的文档计划。",
 					questionTitle: "文档大纲评审",
 					loaderLabel: "🧠 AI 正在分析并生成文档大纲评审问题...",
 				},
@@ -935,7 +870,7 @@ export default function (pi: ExtensionAPI) {
 				{
 					agentDef: _refactorGrillAgent,
 					title: "🔧 重构方案评审",
-					description: "是否进入重构方案评审 (Grill) 模式？\nAI 会从模块边界、API 兼容性、测试策略、迁移风险等维度审视你的重构计划。",
+					description: "AI 会从模块边界、API 兼容性、测试策略、迁移风险等维度审视你的重构计划。",
 					questionTitle: "重构方案评审",
 					loaderLabel: "🧠 AI 正在分析代码并生成重构评审问题...",
 				},
@@ -954,7 +889,7 @@ export default function (pi: ExtensionAPI) {
 				{
 					agentDef: _testGrillAgent,
 					title: "🧪 测试计划评审",
-					description: "是否进入测试计划评审 (Grill) 模式？\nAI 会从覆盖维度、边界条件、模拟策略等角度审视你的测试方案。",
+					description: "AI 会从覆盖维度、边界条件、模拟策略等角度审视你的测试方案。",
 					questionTitle: "测试计划评审",
 					loaderLabel: "🧠 AI 正在分析并生成测试评审问题...",
 				},
@@ -981,7 +916,7 @@ export default function (pi: ExtensionAPI) {
 				{
 					agentDef: _perfGrillAgent,
 					title: "⚡ 性能优化方案评审",
-					description: "是否进入性能优化方案评审 (Grill) 模式？\nAI 会从基准测试方法、优化方向、回归风险等维度审视你的方案。",
+					description: "AI 会从基准测试方法、优化方向、回归风险等维度审视你的方案。",
 					questionTitle: "性能优化方案评审",
 					loaderLabel: "🧠 AI 正在分析并生成性能优化评审问题...",
 				},
@@ -1028,11 +963,8 @@ export default function (pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const cp = loadCheckpointFromFile(ctx.cwd);
 			if (!cp) {
-				ctx.ui.notify("❌ 未找到中断的工作流 checkpoint", "error");
 				return;
 			}
-			ctx.ui.notify(`🔄 正在恢复工作流 (${cp.updatedAt})...`, "info");
-			// runWorkflow 内部会检测 checkpoint 并自动恢复
 			await runWorkflow(ctx, pi, cp.prompt, { steps: FEAT_WORKFLOW_STEPS });
 		},
 	});

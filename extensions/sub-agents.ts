@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { uiSelect } from "./ui-helpers";
 
 // ── Configuration ────────────────────────────────────────────
 
@@ -671,7 +672,8 @@ export default function (pi: ExtensionAPI) {
 
 		// 对于普通关键词触发的审查请求,询问用户选择模式
 		// ctx.ui.select 接受 string[],返回选中的字符串
-		const mode = await ctx.ui.select(
+		const mode = await uiSelect(
+			ctx,
 			"🔍 检测到审查意图",
 			[
 				"1. 后台审查(非阻塞,异步通知)",

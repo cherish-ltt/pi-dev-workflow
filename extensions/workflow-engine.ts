@@ -8,7 +8,7 @@
  *   4. 支持 [] 标记的确认步骤
  *   5. Checkpoint 保存/恢复（断点续传）
  *   6. 超时处理（按 mode 策略分支）
- *   7. 进度面板 UI
+ *   7. 进度面板 UI — 使用 ctx.ui.setWidget() 持久化面板，支持 Ctrl+O 展开
  *
  * 被 dev-prompts.ts 引入，不独立作为 extension 加载。
  */
@@ -18,6 +18,16 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { spawnSubagent, extractFinalOutput, discoverAgents, type AgentDef, type SubagentResult } from "./sub-agents";
+import {
+	uiSelect,
+	uiConfirm,
+	uiInput,
+	updateWorkflowWidget,
+	buildWidgetState,
+	sendWorkflowResult,
+	type WorkflowStepWidgetState,
+	type WorkflowWidgetState,
+} from "./ui-helpers";
 
 // ═══════════════════════════════════════════════════════════════
 //  Types
@@ -169,7 +179,7 @@ export function parseReviewerOutput(
 export function extractSeverityFromText(
 	text: string,
 ): { maxSeverity: string; critical: number; medium: number; low: number } | null {
-	// 模式1: ### C1. / ### M1. / ### L1. ——最可靠，两份新审查文件均使用此格式
+	// 模式1: ### C1. / ### M1. / ### L1.
 	const headerCritical = [...text.matchAll(/^###\s+C\d+\./gm)].length;
 	const headerMedium   = [...text.matchAll(/^###\s+M\d+\./gm)].length;
 	const headerLow      = [...text.matchAll(/^###\s+L\d+\./gm)].length;
@@ -182,7 +192,7 @@ export function extractSeverityFromText(
 		};
 	}
 
-	// 模式2: | C2 | critical | ... |  (表格行，multiline 匹配)
+	// 模式2: | C2 | critical | ... |
 	const tableCritical = [...text.matchAll(/^\|\s*\w+\s*\|\s*critical/gim)].length;
 	const tableMedium   = [...text.matchAll(/^\|\s*\w+\s*\|\s*medium/gim)].length;
 	const tableLow      = [...text.matchAll(/^\|\s*\w+\s*\|\s*low/gim)].length;
@@ -195,7 +205,7 @@ export function extractSeverityFromText(
 		};
 	}
 
-	// 模式3: **Severity**: critical / **严重程度**: critical
+	// 模式3: **Severity**: critical
 	const labelCritical = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*critical/gi)].length;
 	const labelMedium   = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*medium/gi)].length;
 	const labelLow      = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*low/gi)].length;
@@ -256,34 +266,6 @@ export function loadCheckpointFromFile(cwd: string): CheckpointData | null {
 /** 删除 checkpoint 文件（工作流完成后清理） */
 export function deleteCheckpointFile(cwd: string): void {
 	try { fs.unlinkSync(path.join(cwd, CHECKPOINT_FILE)); } catch { /* ignore */ }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  Progress display
-// ═══════════════════════════════════════════════════════════════
-
-/** 在 TUI 中渲染工作流进度面板 */
-function showProgress(
-	ctx: ExtensionCommandContext,
-	steps: WorkflowStepDef[],
-	stepStates: WorkflowStepState[],
-	currentIdx: number,
-): void {
-	const lines: string[] = ["📋 工作流进度"];
-	for (let i = 0; i < steps.length; i++) {
-		const s = steps[i];
-		const st = stepStates[i] ?? { status: "pending" };
-		const icon =
-			st.status === "done" ? "✅" :
-			st.status === "running" ? "⏳" :
-			st.status === "failed" ? "❌" :
-			st.status === "skipped" ? "⏭️" : "⬜";
-		const dur = st.durationMs != null ? ` (${(st.durationMs / 1000).toFixed(1)}s)` : "";
-		const loop = st.loopCount && st.loopCount > 0 ? ` x${st.loopCount}` : "";
-		const arrow = i === currentIdx ? " ▶" : "  ";
-		lines.push(`${arrow} ${icon} ${s.label}${dur}${loop}`);
-	}
-	ctx.ui.notify(lines.join("\n"), "info");
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -418,6 +400,65 @@ function buildReviewTask(
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  Widget state management
+// ═══════════════════════════════════════════════════════════════
+
+let _widgetMode: WorkflowMode = "attended";
+let _widgetSteps: WorkflowStepWidgetState[] = [];
+let _widgetCurrentIdx = 0;
+let _widgetStartTime = 0;
+let _widgetExtraToolCount = 0;
+let _widgetExtraTokenCount = 0;
+
+function refreshWidget(ctx: ExtensionCommandContext): void {
+	const widgetState = buildWidgetState(
+		_widgetMode,
+		_widgetSteps,
+		_widgetCurrentIdx,
+		_widgetStartTime,
+		_widgetSteps.some(s => s.status === "running") ? "running" :
+			_widgetSteps.some(s => s.status === "failed") ? "failed" :
+			_widgetSteps.every(s => s.status === "done" || s.status === "skipped") ? "done" :
+			"running",
+		{ toolCount: _widgetExtraToolCount, tokenCount: _widgetExtraTokenCount },
+	);
+	updateWorkflowWidget(ctx, widgetState);
+}
+
+function initWidget(ctx: ExtensionCommandContext, mode: WorkflowMode, stepsCount: number): void {
+	_widgetMode = mode;
+	_widgetSteps = [];
+	for (let i = 0; i < stepsCount; i++) {
+		_widgetSteps.push({ label: "", status: "pending" });
+	}
+	_widgetCurrentIdx = 0;
+	_widgetStartTime = Date.now();
+	_widgetExtraToolCount = 0;
+	_widgetExtraTokenCount = 0;
+	refreshWidget(ctx);
+}
+
+function updateWidgetStep(ctx: ExtensionCommandContext, index: number, label: string, status: WorkflowStepWidgetState["status"], extra?: { durationMs?: number; loopCount?: number; error?: string }): void {
+	if (index < _widgetSteps.length) {
+		_widgetSteps[index] = {
+			label,
+			status,
+			...extra,
+		};
+	}
+	refreshWidget(ctx);
+}
+
+function setWidgetCurrentStep(ctx: ExtensionCommandContext, index: number): void {
+	_widgetCurrentIdx = index;
+	refreshWidget(ctx);
+}
+
+function cleanupWidget(ctx: ExtensionCommandContext): void {
+	updateWorkflowWidget(ctx, null);
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  Single-step executor
 // ═══════════════════════════════════════════════════════════════
 
@@ -447,7 +488,6 @@ async function executeSingleStep(
 	// ── Timeout handling ──
 	if (isTimeoutResult(result)) {
 		if (mode === "full-auto" && !retried) {
-			ctx.ui.notify(`⏰ ${step.label} 超时，自动重试...`, "warning");
 			result = await runAgentWithProgress(
 				ctx, agent,
 				`[RETRY] 上次执行超时，请控制节奏避免再次超时。\n\n${task}`,
@@ -455,7 +495,8 @@ async function executeSingleStep(
 			);
 			retried = true;
 		} else {
-			const choice = await ctx.ui.select(
+			const choice = await uiSelect(
+				ctx,
 				`⏰ ${step.label} 执行超时`,
 				["1. 重新执行", "2. 跳过此步骤", "3. 取消工作流"],
 			);
@@ -476,13 +517,6 @@ async function executeSingleStep(
 	if (result.exitCode !== 0 && result.stderr) {
 		throw new Error(`Agent 错误 (exit ${result.exitCode}): ${result.stderr.slice(0, 500)}`);
 	}
-
-	// Extract output for any post-processing
-	const finalOutput = extractFinalOutput(result.output);
-	if (agentName === "planner" && !planFileRelPath) {
-		// Planner 可能已写文件，后续步骤会自动查找
-	}
-	// For reviewer, no special handling needed in single step
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -518,8 +552,6 @@ async function executeLoopGroup(
 		const iterLabel =
 			loopCount > 0 ? `${step.label} (第 ${loopCount + 1}/${maxLoops} 次)` : step.label;
 
-		ctx.ui.notify(`🔄 ${iterLabel}: 执行 ${step.loopAgentName}...`, "info");
-
 		// ── Run loop agent (worker / trimmer) ──
 		const loopTask = buildTaskForStep(
 			step.loopAgentName!,
@@ -536,14 +568,10 @@ async function executeLoopGroup(
 		// Timeout handling for loop agent
 		if (isTimeoutResult(agentResult)) {
 			if (mode === "full-auto") {
-				ctx.ui.notify(
-					`⏰ ${step.loopAgentName} 超时，自动进入审查阶段`,
-					"warning",
-				);
-				// Prepare review task with timeout warning
 				contextPrompt = `[TIMEOUT_WARNING] 上一个 ${step.loopAgentName} 执行超时，工作可能未完成。请重点检查是否存在不完整或未实现的代码。\n\n${buildReviewTask(prompt, planFileRelPath, ctx.cwd)}`;
 			} else {
-				const choice = await ctx.ui.select(
+				const choice = await uiSelect(
+					ctx,
 					`⏰ ${step.loopAgentName} 执行超时`,
 					["1. 重新执行", "2. 进入审查阶段", "3. 跳过此步骤", "4. 取消工作流"],
 				);
@@ -552,14 +580,12 @@ async function executeLoopGroup(
 				if (choice.startsWith("2")) {
 					contextPrompt = `[TIMEOUT_WARNING] 上一个 ${step.loopAgentName} 执行超时，工作可能未完成。请重点检查是否存在不完整或未实现的代码。\n\n${buildReviewTask(prompt, planFileRelPath, ctx.cwd)}`;
 				} else {
-					// Retry
 					agentResult = await runAgentWithProgress(
 						ctx, loopAgent,
 						`[RETRY] 上次执行超时，请控制节奏避免再次超时。\n\n${loopTask}`,
 						iterLabel, loopStartTime, step.timeoutMs,
 					);
 					if (isTimeoutResult(agentResult)) {
-						ctx.ui.notify(`❌ ${step.loopAgentName} 重试仍然超时，跳过`, "error");
 						contextPrompt = `[TIMEOUT_WARNING] 上一个 ${step.loopAgentName} 执行超时。\n\n${buildReviewTask(prompt, planFileRelPath, ctx.cwd)}`;
 					}
 				}
@@ -567,8 +593,6 @@ async function executeLoopGroup(
 		}
 
 		// ── Run reviewer ──
-		ctx.ui.notify(`🔍 ${iterLabel}: 运行审查...`, "info");
-
 		const reviewTask = contextPrompt.includes("[TIMEOUT_WARNING]")
 			? contextPrompt
 			: buildReviewTask(contextPrompt, planFileRelPath, ctx.cwd);
@@ -578,17 +602,14 @@ async function executeLoopGroup(
 			`审查 ${step.loopAgentName}`, loopStartTime, step.timeoutMs,
 		);
 
-		// fix: subagent 输出为 JSON 格式，需先提取纯文本再解析 REVIEW_SUMMARY
 		const extractedOutput = extractFinalOutput(reviewResult.output) || reviewResult.output;
 		const combinedOutput = extractedOutput + "\n" + reviewResult.stderr;
 		let reviewSummary = parseReviewerOutput(combinedOutput);
 
-		// fallback 1: 从 reviewer 回复文本中分析严重等级（### C1. / 表格行 / 标签）
 		if (!reviewSummary) {
 			reviewSummary = extractSeverityFromText(extractedOutput);
 		}
 
-		// fallback 2: 读取最新审查文件并分析
 		if (!reviewSummary) {
 			const reviewContent = readLatestReviewMd(ctx.cwd);
 			if (reviewContent) {
@@ -598,17 +619,12 @@ async function executeLoopGroup(
 		}
 
 		const sev = reviewSummary?.maxSeverity ?? "low";
-		ctx.ui.notify(
-			`📊 审查: severity=${sev} (critical=${reviewSummary?.critical ?? 0}, medium=${reviewSummary?.medium ?? 0}, low=${reviewSummary?.low ?? 0})`,
-			sev === "critical" ? "warning" : sev === "medium" ? "info" : "info",
-		);
 
 		loopCount++;
 
 		// ── Decide whether to loop ──
 		if (sev === "critical" && loopCount < maxLoops) {
 			if (mode === "full-auto") {
-				ctx.ui.notify(`🔄 自动循环 (${loopCount}/${maxLoops})`, "warning");
 				contextPrompt = [
 					prompt,
 					"",
@@ -619,7 +635,8 @@ async function executeLoopGroup(
 				].join("\n");
 				continue;
 			} else {
-				const shouldLoop = await ctx.ui.confirm(
+				const shouldLoop = await uiConfirm(
+					ctx,
 					"🔄 检测到严重问题",
 					`审查发现 ${reviewSummary?.critical ?? 0} 个严重问题。\n是否进入下一轮循环 (${loopCount}/${maxLoops})？`,
 				);
@@ -655,23 +672,16 @@ export interface WorkflowConfig {
 }
 
 /**
- * 运行完整工作流。
- *
- * 流程：
- * 1. 加载 workflow agent 定义并验证必需 agent 存在
- * 2. 检测并恢复 checkpoint（断点续传）或选择运行模式
- * 3. 按步骤顺序执行每个步骤（auto/confirm/loop-group）
- * 4. 每步完成后保存 checkpoint
- * 5. 全部完成后清理 checkpoint
+ * 运行完整工作流（支持 checkpoint 断点续传和持久化面板）。
  *
  * @param ctx   命令上下文
  * @param pi    Extension API
  * @param prompt  用户原始 prompt（已含 grill 评审记录）
- * @param config  工作流步骤配置（来自 dev-prompts.ts 的 WORKFLOW_STEPS 常量）
+ * @param config  工作流步骤配置
  */
 export async function runWorkflow(
 	ctx: ExtensionCommandContext,
-	_pi: ExtensionAPI,
+	pi: ExtensionAPI,
 	prompt: string,
 	config: WorkflowConfig,
 ): Promise<void> {
@@ -694,7 +704,7 @@ export async function runWorkflow(
 		}
 		for (const n of names) {
 			if (!agentMap.has(n)) {
-				ctx.ui.notify(`❌ 未找到 agent "${n}"，请检查 agents/workflow/ 目录`, "error");
+				await uiSelect(ctx, `❌ 未找到 agent "${n}"，请检查 agents/workflow/ 目录`, ["确定"]);
 				return;
 			}
 		}
@@ -710,7 +720,8 @@ export async function runWorkflow(
 
 	const existingCp = loadCheckpointFromFile(ctx.cwd);
 	if (existingCp) {
-		const resume = await ctx.ui.confirm(
+		const resume = await uiConfirm(
+			ctx,
 			"🔄 恢复工作流",
 			`发现上次未完成的工作流（${existingCp.updatedAt}），是否继续？\n选择「否」将丢弃进度重新开始。`,
 		);
@@ -721,21 +732,19 @@ export async function runWorkflow(
 			loopCounts = existingCp.loopCounts;
 			planFileRelPath = existingCp.planFilePath;
 			resumeFlow = true;
-			ctx.ui.notify(`🔄 已恢复，从步骤 ${currentStepIndex + 1}/${steps.length} 继续`, "info");
 		} else {
 			deleteCheckpointFile(ctx.cwd);
 		}
 	}
 
 	if (!existingCp || !resumeFlow) {
-		const modeChoice = await ctx.ui.select("🤖 选择工作流模式", [
+		const modeChoice = await uiSelect(ctx, "🤖 选择工作流模式", [
 			"1. 值守（默认）— 自动流程，[]步骤需确认，循环需许可",
 			"2. 完全信任 — 全自动运行，无需任何确认",
 			"3. 完全值守 — 每一步都需用户确认",
 			"4. 取消工作流",
 		]);
 		if (!modeChoice || modeChoice.startsWith("4")) {
-			ctx.ui.notify("❌ 工作流已取消", "warning");
 			return;
 		}
 		mode = modeChoice.startsWith("2") ? "full-auto" :
@@ -754,11 +763,12 @@ export async function runWorkflow(
 		});
 	}
 
-	ctx.ui.notify(
-		`📋 工作流启动 — ${mode === "full-auto" ? "全自动模式" : mode === "full-attended" ? "完全值守模式" : "值守模式"}`,
-		"info",
-	);
-	showProgress(ctx, steps, stepStates, currentStepIndex);
+	// ── Initialize the persistent widget ──
+	initWidget(ctx, mode, steps.length);
+	// Populate step labels
+	for (let i = 0; i < steps.length; i++) {
+		updateWidgetStep(ctx, i, steps[i]!.label, stepStates[i]?.status === "done" ? "done" : "pending");
+	}
 
 	// ═══════════════════════════════════════════════════════════
 	//  Step loop
@@ -771,30 +781,31 @@ export async function runWorkflow(
 		// Skip already completed steps (resume)
 		if (state.status === "done" || state.status === "skipped") continue;
 
+		// Update current step in widget
+		setWidgetCurrentStep(ctx, currentStepIndex);
+
 		// ── Confirmation for [confirm] steps ──
 		if (step.type === "confirm" && mode !== "full-auto") {
-			const choice = await ctx.ui.select(`📌 ${step.label}`, [
+			const choice = await uiSelect(ctx, `📌 ${step.label}`, [
 				"1. 进入此步骤",
 				"2. 自定义输入",
 				"3. 跳过此步骤",
 				"4. 取消工作流",
 			]);
 			if (!choice || choice.startsWith("4")) {
-				ctx.ui.notify("❌ 工作流已取消", "warning");
 				state.status = "skipped";
 				saveCheckpoint(ctx.cwd, buildCp());
+				cleanupWidget(ctx);
 				return;
 			}
 			if (choice.startsWith("3")) {
 				state.status = "skipped";
 				saveCheckpoint(ctx.cwd, buildCp());
-				ctx.ui.notify(`⏭️ 已跳过: ${step.label}`, "info");
+				updateWidgetStep(ctx, currentStepIndex, step.label, "skipped");
 				continue;
 			}
 			if (choice.startsWith("2")) {
-				const customInput = await ctx.ui.input("✏️ 自定义输入", {
-					placeholder: "输入你的指令或反馈，将注入步骤上下文",
-				});
+				const customInput = await uiInput(ctx, "✏️ 自定义输入", "输入你的指令或反馈，将注入步骤上下文");
 				if (customInput !== undefined && customInput.trim()) {
 					prompt = `${prompt}\n\n## 用户自定义指令\n${customInput.trim()}`;
 				}
@@ -803,29 +814,29 @@ export async function runWorkflow(
 
 		// ── Full-attended: confirm every auto step ──
 		if (mode === "full-attended" && step.type !== "confirm") {
-			const choice = await ctx.ui.select(`📌 ${step.label} — 执行？`, [
+			const choice = await uiSelect(ctx, `📌 ${step.label} — 执行？`, [
 				"1. 执行",
 				"2. 跳过",
 				"3. 取消工作流",
 			]);
 			if (!choice || choice.startsWith("3")) {
-				ctx.ui.notify("❌ 工作流已取消", "warning");
 				state.status = "skipped";
 				saveCheckpoint(ctx.cwd, buildCp());
+				cleanupWidget(ctx);
 				return;
 			}
 			if (choice.startsWith("2")) {
 				state.status = "skipped";
 				saveCheckpoint(ctx.cwd, buildCp());
-				ctx.ui.notify(`⏭️ 已跳过: ${step.label}`, "info");
+				updateWidgetStep(ctx, currentStepIndex, step.label, "skipped");
 				continue;
 			}
 		}
 
 		// ── Execute ──
 		state.status = "running";
+		updateWidgetStep(ctx, currentStepIndex, step.label, "running");
 		const stepStartTime = Date.now();
-		showProgress(ctx, steps, stepStates, currentStepIndex);
 
 		try {
 			if (step.type === "loop-group") {
@@ -839,21 +850,33 @@ export async function runWorkflow(
 			}
 			state.status = "done";
 			state.durationMs = Date.now() - stepStartTime;
-			ctx.ui.notify(`✅ ${step.label} — 完成 (${(state.durationMs / 1000).toFixed(1)}s)`, "success");
+			updateWidgetStep(ctx, currentStepIndex, step.label, "done", { durationMs: state.durationMs, loopCount: state.loopCount });
 		} catch (err) {
 			state.status = "failed";
 			state.durationMs = Date.now() - stepStartTime;
 			state.error = err instanceof Error ? err.message : String(err);
-			ctx.ui.notify(`❌ ${step.label} — 失败: ${state.error}`, "error");
+			updateWidgetStep(ctx, currentStepIndex, step.label, "failed", { durationMs: state.durationMs, error: state.error });
 		}
 
-		showProgress(ctx, steps, stepStates, currentStepIndex + 1);
+		setWidgetCurrentStep(ctx, currentStepIndex + 1);
 		saveCheckpoint(ctx.cwd, buildCp());
 	}
 
 	// ── Done ──
 	deleteCheckpointFile(ctx.cwd);
-	ctx.ui.notify("🎉 工作流全部完成！", "success");
+
+	// Send persistent result to session
+	const finalState = buildWidgetState(
+		mode,
+		_widgetSteps,
+		steps.length,
+		_widgetStartTime,
+		stepStates.every(s => s.status === "done" || s.status === "skipped") ? "done" : "failed",
+	);
+	sendWorkflowResult(pi, finalState, prompt);
+
+	// Cleanup widget
+	setTimeout(() => cleanupWidget(ctx), 5000);
 
 	// ── Checkpoint builder ──
 	function buildCp(): CheckpointData {
