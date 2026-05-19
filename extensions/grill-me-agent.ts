@@ -80,6 +80,37 @@ function grillOutputPath(cwd: string): string {
 	return path.join(dir, `questions-${ts}.json`);
 }
 
+/**
+ * Save the final assembled prompt to a timestamped answer file.
+ * Returns the relative path from cwd (for display in notifications).
+ */
+export function saveAnswerFile(cwd: string, content: string): string {
+	const dir = ensureOutputDir(cwd, GRILL_DIRNAME);
+	const ts = Date.now().toString(36);
+	const filename = `answer-${ts}.md`;
+	fs.writeFileSync(path.join(dir, filename), content, "utf-8");
+	return path.join(DEV_OUTPUT_DIR, GRILL_DIRNAME, filename);
+}
+
+/**
+ * Find the most recent answer backup file and read its content.
+ * Returns undefined if no backup exists or read fails.
+ */
+export function recoverFromBackup(cwd: string): string | undefined {
+	const dir = path.join(cwd, DEV_OUTPUT_DIR, GRILL_DIRNAME);
+	try {
+		if (!fs.existsSync(dir)) return undefined;
+		const files = fs.readdirSync(dir)
+			.filter(f => f.startsWith("answer-") && f.endsWith(".md"))
+			.map(f => ({ name: f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+			.sort((a, b) => b.mtime - a.mtime);
+		if (files.length === 0) return undefined;
+		return fs.readFileSync(path.join(dir, files[0].name), "utf-8");
+	} catch {
+		return undefined;
+	}
+}
+
 /** Generate a safe PRD filename. */
 function generatePrdFilename(moduleSuggestion: string): string {
 	const safe = moduleSuggestion

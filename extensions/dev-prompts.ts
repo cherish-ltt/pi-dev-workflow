@@ -24,7 +24,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { runGrillPhase, runPRDPhase, type GrillOptions } from "./grill-me-agent";
+import { runGrillPhase, runPRDPhase, saveAnswerFile, recoverFromBackup, type GrillOptions } from "./grill-me-agent";
 import { discoverAgents } from "./sub-agents";
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -406,9 +406,23 @@ async function runWizardWithGrill(
 		finalPrompt = grillResult.enhancedPrompt;
 	}
 
+	// ── Guard & persist before sending ───────────────────────
+	if (!finalPrompt) {
+		ctx.ui.notify("⚠️ 最终提示词为空，正在尝试从备份文件恢复...", "warning");
+		const recovered = recoverFromBackup(ctx.cwd);
+		if (recovered) {
+			finalPrompt = recovered;
+			ctx.ui.notify("✅ 已从备份文件恢复提示词内容", "success");
+		} else {
+			ctx.ui.notify("❌ 错误：最终提示词为空且无可用备份，无法发送", "error");
+			return;
+		}
+	}
+	const answerPath = saveAnswerFile(ctx.cwd, finalPrompt);
+
 	ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
 	pi.sendUserMessage(finalPrompt);
-	ctx.ui.notify(`📝 /dev-${type} 提示词已投递，主代理正在处理`, "info");
+	ctx.ui.notify(`📝 /dev-${type} 提示词已投递，主代理正在处理。备份: ${answerPath}`, "info");
 }
 
 /**
@@ -569,9 +583,30 @@ export default function (pi: ExtensionAPI) {
 			const finalPrompt = grillResult.enhancedPrompt;
 
 			// ── Phase 4: Send to main agent ─────────────────────
+			if (!finalPrompt) {
+				ctx.ui.notify("⚠️ 最终提示词为空，正在尝试从备份文件恢复...", "warning");
+				const recovered = recoverFromBackup(ctx.cwd);
+				if (recovered) {
+					ctx.ui.notify("✅ 已从备份文件恢复提示词内容", "success");
+					const recoveredPath = saveAnswerFile(ctx.cwd, recovered);
+					ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
+					pi.sendUserMessage(recovered);
+					ctx.ui.notify(`📝 /dev-feat 提示词已投递（恢复自备份），主代理正在处理。备份: ${recoveredPath}`, "info");
+					// ── Phase 5: Wait for agent to finish ───────────────
+					await ctx.waitForIdle();
+					// ── Phase 6: PRD generation ─────────────────────────
+					const moduleHint = (answers as FeatFields).module || "feature";
+					await runPRDPhase(recovered, moduleHint, pi, ctx);
+					return;
+				} else {
+					ctx.ui.notify("❌ 错误：最终提示词为空且无可用备份，无法发送", "error");
+					return;
+				}
+			}
+			const answerPath = saveAnswerFile(ctx.cwd, finalPrompt);
 			ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
 			pi.sendUserMessage(finalPrompt);
-			ctx.ui.notify(`📝 /dev-feat 提示词已投递，主代理正在处理`, "info");
+			ctx.ui.notify(`📝 /dev-feat 提示词已投递，主代理正在处理。备份: ${answerPath}`, "info");
 
 			// ── Phase 5: Wait for agent to finish ───────────────
 			await ctx.waitForIdle();
