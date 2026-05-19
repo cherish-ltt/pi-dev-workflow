@@ -61,8 +61,25 @@ interface WorkflowStepState {
 	error?: string;
 }
 
+interface FileChangeEntry {
+	agent: string;
+	stepIndex: number;
+	type: "edit" | "new" | "delete" | "read";
+	filePath: string;
+	timestamp: string;
+}
+
+interface AgentRunEntry {
+	agent: string;
+	stepIndex: number;
+	startedAt: string;
+	durationMs: number;
+	exitCode: number;
+	toolCount: number;
+}
+
 interface CheckpointData {
-	version: 1;
+	version: 2;
 	createdAt: string;
 	updatedAt: string;
 	prompt: string;
@@ -71,6 +88,14 @@ interface CheckpointData {
 	currentStepIndex: number;
 	loopCounts: Record<string, number>;
 	planFilePath?: string;
+	// New fields for better UI and traceability
+	taskSummary?: string;
+	workflowType?: string;
+	fileChanges?: FileChangeEntry[];
+	subAgentRuns?: number;
+	filesModified?: number;
+	filesCreated?: number;
+	agentRunHistory?: AgentRunEntry[];
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -200,6 +225,19 @@ export function isTimeoutResult(r: SubagentResult): boolean {
 	return r.exitCode === -1 && r.stderr.includes("timed out");
 }
 
+/**
+ * Extract a human-readable task summary from the prompt.
+ */
+export function extractTaskSummary(prompt: string): string {
+	const firstLine = prompt.split("\n").find(l => l.trim()) ?? "";
+	const tagMatch = firstLine.match(/^\[([^\]]+)\]\s*(.+)/);
+	if (tagMatch) {
+		return `${tagMatch[1]} - ${tagMatch[2]!.trim()}`;
+	}
+	const cleaned = firstLine.replace(/^[*\s#]+/, "").trim();
+	return cleaned.length > 60 ? cleaned.substring(0, 57) + "..." : cleaned || "工作流任务";
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  Checkpoint
 // ═══════════════════════════════════════════════════════════════
@@ -207,13 +245,29 @@ export function isTimeoutResult(r: SubagentResult): boolean {
 function saveCheckpoint(cwd: string, data: CheckpointData): void {
 	ensureOutputDir(cwd, "pi-workflow");
 	data.updatedAt = new Date().toISOString();
+	// Always version 2
+	(data as CheckpointData).version = 2;
+	// Enrich with file changes and agent history from module state
+	if (_workflowFileChanges.length > 0 && !data.fileChanges) {
+		data.fileChanges = [..._workflowFileChanges];
+	}
+	if (_workflowAgentRunHistory.length > 0 && !data.agentRunHistory) {
+		data.agentRunHistory = [..._workflowAgentRunHistory];
+	}
 	fs.writeFileSync(path.join(cwd, CHECKPOINT_FILE), JSON.stringify(data, null, 2), "utf-8");
 }
 
 export function loadCheckpointFromFile(cwd: string): CheckpointData | null {
 	try {
 		const content = fs.readFileSync(path.join(cwd, CHECKPOINT_FILE), "utf-8");
-		return JSON.parse(content) as CheckpointData;
+		const data = JSON.parse(content) as CheckpointData;
+		// Backfill missing fields for v1 checkpoints
+		if (!data.version || data.version < 2) {
+			data.version = 2;
+			data.fileChanges = data.fileChanges ?? [];
+			data.agentRunHistory = data.agentRunHistory ?? [];
+		}
+		return data;
 	} catch {
 		return null;
 	}
@@ -339,6 +393,12 @@ let _workflowPlanFileRelPath: string | undefined;
 let _workflowLoopCounts: Record<string, number> = {};
 /** Original checkpoint creation timestamp, for preserving across cancel. */
 let _workflowCreatedAt: string = new Date().toISOString();
+/** Track file changes globally for checkpoint persistence */
+let _workflowFileChanges: FileChangeEntry[] = [];
+/** Track agent run history */
+let _workflowAgentRunHistory: AgentRunEntry[] = [];
+/** Store step defs for pre-populating sub-steps */
+let _workflowStepDefs: WorkflowStepDef[] = [];
 
 let _widgetMode: WorkflowMode = "attended";
 let _widgetSteps: WorkflowStepWidgetState[] = [];
@@ -392,6 +452,7 @@ function updateWidgetStep(
 		timeoutMs?: number;
 		error?: string;
 		subSteps?: WorkflowSubStepWidgetState[];
+		startedAt?: number;
 	},
 ): void {
 	if (index < _widgetSteps.length) {
@@ -404,6 +465,46 @@ function updateWidgetStep(
 	refreshWidget();
 }
 
+function populatePredefinedSubSteps(stepIndex: number): void {
+	const step = _widgetSteps[stepIndex];
+	if (!step || !_workflowStepDefs[stepIndex]) return;
+	if (step.subSteps && step.subSteps.length > 0) return; // already populated
+
+	const def = _workflowStepDefs[stepIndex]!;
+	const newSubSteps: WorkflowSubStepWidgetState[] = [];
+
+	if (def.type === "loop-group") {
+		if (def.loopAgentName) {
+			newSubSteps.push({
+				agent: def.loopAgentName,
+				status: "pending",
+				tools: [],
+				outputs: [],
+			});
+		}
+		if (def.reviewAgentName) {
+			newSubSteps.push({
+				agent: def.reviewAgentName,
+				status: "pending",
+				tools: [],
+				outputs: [],
+			});
+		}
+	} else if (def.agentName) {
+		newSubSteps.push({
+			agent: def.agentName,
+			status: "pending",
+			tools: [],
+			outputs: [],
+		});
+	}
+
+	if (newSubSteps.length > 0) {
+		step.subSteps = newSubSteps;
+		refreshWidget();
+	}
+}
+
 function addWidgetSubStepTool(stepIndex: number, agentName: string, tool: string): void {
 	const step = _widgetSteps[stepIndex];
 	if (!step) return;
@@ -412,6 +513,27 @@ function addWidgetSubStepTool(stepIndex: number, agentName: string, tool: string
 		if (!sub.tools) sub.tools = [];
 		sub.tools.push(tool);
 		if (sub.tools.length > 20) sub.tools = sub.tools.slice(-20); // keep last 20
+
+		// Also track as file change for checkpoint
+		const toolMatch = tool.match(/^(edit|new|delete|read):\s*(.+)/i);
+		if (toolMatch) {
+			const changeType = toolMatch[1]!.toLowerCase() as FileChangeEntry["type"];
+			const filePath = toolMatch[2]!.trim();
+			// Deduplicate
+			const exists = _workflowFileChanges.some(
+				c => c.filePath === filePath && c.type === changeType && c.stepIndex === stepIndex && c.agent === agentName,
+			);
+			if (!exists && filePath.length > 3) {
+				_workflowFileChanges.push({
+					agent: agentName,
+					stepIndex,
+					type: changeType,
+					filePath,
+					timestamp: new Date().toISOString(),
+				});
+			}
+		}
+
 		refreshWidget();
 	}
 }
@@ -517,6 +639,7 @@ async function runAgentWithProgress(
 	timeoutMs: number,
 ): Promise<SubagentResult> {
 	const signal = _workflowAbortController?.signal;
+	const agentStartTime = Date.now();
 
 	// Initialize sub-step in widget
 	const step = _widgetSteps[stepIndex];
@@ -529,7 +652,13 @@ async function runAgentWithProgress(
 				status: "running",
 				tools: [],
 				outputs: [],
+				startedAt: agentStartTime,
 			});
+			refreshWidget();
+		} else {
+			// Update existing sub-step status and startedAt
+			existing.status = "running";
+			existing.startedAt = agentStartTime;
 			refreshWidget();
 		}
 	}
@@ -550,6 +679,18 @@ async function runAgentWithProgress(
 		if (outputMatch) {
 			addWidgetSubStepOutput(stepIndex, agentName, outputMatch[1]!);
 		}
+	});
+
+	const agentDuration = Date.now() - agentStartTime;
+
+	// Record agent run in history
+	_workflowAgentRunHistory.push({
+		agent: agentName,
+		stepIndex,
+		startedAt: new Date(agentStartTime).toISOString(),
+		durationMs: agentDuration,
+		exitCode: result.exitCode,
+		toolCount: _widgetExtraToolCount,
 	});
 
 	// ── Post-completion: parse subagent output for tool calls and file paths ──
@@ -791,7 +932,12 @@ async function executeWorkflowBackground(
 
 		setWidgetCurrentStep(currentStepIndex);
 
-		// Confirmation for [confirm] steps
+		// Pre-populate sub-steps for pending steps so UI shows queued agents
+		populatePredefinedSubSteps(currentStepIndex);
+
+		// ── User confirmations (BEFORE timer starts) ──
+
+		// Confirmation for [confirm] steps (attended mode)
 		if (step.type === "confirm" && mode !== "full-auto") {
 			const choice = await uiSelect(ctx, `📌 ${step.label}`, [
 				"1. 进入此步骤", "2. 自定义输入", "3. 跳过此步骤", "4. 取消工作流",
@@ -823,10 +969,24 @@ async function executeWorkflowBackground(
 			}
 		}
 
-		// Execute
+		// Attended: confirm loop-group steps (e.g. 实施代码 → 审查)
+		if (step.type === "loop-group" && mode === "attended") {
+			const choice = await uiSelect(ctx, `📌 ${step.label}`, [
+				"1. 进入此步骤", "2. 跳过此步骤", "3. 取消工作流",
+			]);
+			if (!choice || choice.startsWith("3")) { cancelWorkflow(); return; }
+			if (choice.startsWith("2")) {
+				state.status = "skipped";
+				saveCheckpoint(_workflowCwd, buildCp());
+				updateWidgetStep(currentStepIndex, step.label, "skipped");
+				continue;
+			}
+		}
+
+		// ── Execute (timer starts NOW, after all user confirmations) ──
 		state.status = "running";
-		updateWidgetStep(currentStepIndex, step.label, "running", { timeoutMs: step.timeoutMs, maxLoops: step.maxLoops });
 		const stepStartTime = Date.now();
+		updateWidgetStep(currentStepIndex, step.label, "running", { timeoutMs: step.timeoutMs, maxLoops: step.maxLoops, startedAt: stepStartTime });
 
 		try {
 			if (step.type === "loop-group") {
@@ -882,7 +1042,7 @@ async function executeWorkflowBackground(
 
 	function buildCp(): CheckpointData {
 		return {
-			version: 1,
+			version: 2,
 			createdAt: existingCp?.createdAt ?? new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
 			prompt,
@@ -891,6 +1051,13 @@ async function executeWorkflowBackground(
 			currentStepIndex,
 			loopCounts,
 			planFilePath: planFileRelPathInner,
+			taskSummary: extractTaskSummary(prompt),
+			workflowType: _workflowType,
+			fileChanges: [..._workflowFileChanges],
+			subAgentRuns: _workflowAgentRunHistory.length,
+			filesModified: _workflowFileChanges.filter(c => c.type === "edit").length,
+			filesCreated: _workflowFileChanges.filter(c => c.type === "new").length,
+			agentRunHistory: [..._workflowAgentRunHistory],
 		};
 	}
 }
@@ -989,9 +1156,12 @@ export async function runWorkflow(
 	_workflowCreatedAt = existingCp?.createdAt ?? new Date().toISOString();
 	_workflowType = workflowType;
 	_workflowPi = pi;
+	_workflowStepDefs = steps;
+	_workflowFileChanges = existingCp?.fileChanges ? [...existingCp.fileChanges] : [];
+	_workflowAgentRunHistory = existingCp?.agentRunHistory ? [...existingCp.agentRunHistory] : [];
 
 	saveCheckpoint(ctx.cwd, {
-		version: 1,
+		version: 2,
 		createdAt: existingCp?.createdAt ?? new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 		prompt,
@@ -1000,12 +1170,25 @@ export async function runWorkflow(
 		currentStepIndex,
 		loopCounts,
 		planFilePath: planFileRelPath,
+		taskSummary: extractTaskSummary(prompt),
+		workflowType,
+		fileChanges: [..._workflowFileChanges],
+		subAgentRuns: _workflowAgentRunHistory.length,
+		filesModified: _workflowFileChanges.filter(c => c.type === "edit").length,
+		filesCreated: _workflowFileChanges.filter(c => c.type === "new").length,
+		agentRunHistory: [..._workflowAgentRunHistory],
 	});
 
 	// Initialize widget
 	initWidget(ctx, mode, steps.length);
 	for (let i = 0; i < steps.length; i++) {
-		updateWidgetStep(i, steps[i]!.label, stepStates[i]?.status === "done" ? "done" : "pending");
+		const isDoneState = stepStates[i]?.status === "done";
+		updateWidgetStep(i, steps[i]!.label, isDoneState ? "done" : "pending", {
+			maxLoops: steps[i]!.maxLoops,
+			timeoutMs: steps[i]!.timeoutMs,
+		});
+		// Pre-populate sub-steps for all steps (shows queued agents)
+		populatePredefinedSubSteps(i);
 	}
 
 	// Set up abort controller & cancel callback
@@ -1025,7 +1208,7 @@ export async function runWorkflow(
 
 			// ── Save final checkpoint before archiving ──
 			const cancelCp: CheckpointData = {
-				version: 1,
+				version: 2,
 				createdAt: _workflowCreatedAt,
 				updatedAt: new Date().toISOString(),
 				prompt: _workflowPrompt,
@@ -1039,6 +1222,13 @@ export async function runWorkflow(
 				currentStepIndex: _widgetCurrentIdx,
 				loopCounts: { ..._workflowLoopCounts },
 				planFilePath: _workflowPlanFileRelPath,
+				taskSummary: extractTaskSummary(_workflowPrompt),
+				workflowType: _workflowType,
+				fileChanges: [..._workflowFileChanges],
+				subAgentRuns: _workflowAgentRunHistory.length,
+				filesModified: _workflowFileChanges.filter(c => c.type === "edit").length,
+				filesCreated: _workflowFileChanges.filter(c => c.type === "new").length,
+				agentRunHistory: [..._workflowAgentRunHistory],
 			};
 			saveCheckpoint(_workflowCwd, cancelCp);
 

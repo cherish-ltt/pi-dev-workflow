@@ -250,6 +250,8 @@ export interface WorkflowSubStepWidgetState {
 	tokenCount?: number;
 	/** Tool usage count */
 	toolCount?: number;
+	/** When this sub-step started (for live timing) */
+	startedAt?: number;
 }
 
 /**
@@ -261,6 +263,8 @@ export interface WorkflowStepWidgetState {
 	/** Timeout in ms for this step */
 	timeoutMs?: number;
 	durationMs?: number;
+	/** When this step started executing (for live timing) */
+	startedAt?: number;
 	loopCount?: number;
 	maxLoops?: number;
 	error?: string;
@@ -317,6 +321,7 @@ function formatTimeout(ms: number): string {
 
 /**
  * Build the widget component lines for the given state.
+ * Design: 严格要求的新ui — black background, proper tree-format, gold footer
  */
 function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: boolean, width: number): string[] {
 	const lines: string[] = [];
@@ -335,70 +340,135 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 				: theme.fg("warning", "■");
 	lines.push(`${glyph} ${bold(theme, "工作流")} · ${dim(theme, modeLabel)} · ${dim(theme, formatDurationFull(elapsed))}`);
 
-	// ── Step list ──
+	// ── Step list (following 严格要求的新ui format) ──
 	for (let i = 0; i < state.steps.length; i++) {
 		const s = state.steps[i]!;
 		const isCurrent = i === state.currentStepIndex && state.status === "running";
 		const isDone = s.status === "done";
 		const isFailed = s.status === "failed";
 		const isRunning = s.status === "running" || isCurrent;
+		const isPending = s.status === "pending" && !isRunning;
 
+		// Icon
 		const icon =
 			isDone ? theme.fg("success", "✓") :
-			isRunning ? theme.fg("accent", spinnerFrame()) :
+			isRunning ? theme.fg("warning", spinnerFrame()) :
 			isFailed ? theme.fg("error", "✗") :
 			s.status === "skipped" ? theme.fg("warning", "⏭") :
 			dim(theme, "◦");
 
-		const dur = s.durationMs != null ? dim(theme, ` (${formatDurationFull(s.durationMs)}`) : "";
+		// Duration: live for running, final for done, 0s for fresh running
+		let displayDurMs: number | undefined = s.durationMs;
+		if (isRunning && s.startedAt && s.durationMs == null) {
+			displayDurMs = Date.now() - s.startedAt;
+		}
+		// For steps that just started (no startedAt yet), show 0s
+		const durStr = displayDurMs != null
+			? dim(theme, ` (${formatDurationFull(displayDurMs)}`)
+			: isRunning
+				? dim(theme, ` (0s`)
+				: "";
 		const timeout = s.timeoutMs ? dim(theme, `/超时时间${formatTimeout(s.timeoutMs)}`) : "";
-		const durClose = s.durationMs != null ? dim(theme, ")") : "";
-		const loop = s.loopCount && s.loopCount > 0
+		const durClose = (displayDurMs != null || isRunning) ? dim(theme, ")") : "";
+
+		// Loop count display (for loop-group steps)
+		// Show "第 N 次循环" for running/done steps; show "第 0 次循环" for pending loop-group steps
+		const loop = s.loopCount != null && s.loopCount > 0
 			? dim(theme, ` · 第 ${s.loopCount} 次循环`)
-			: "";
-		const marker = isCurrent ? theme.fg("accent", "▶") : " ";
+			: (s.loopCount == null && s.maxLoops != null && isPending)
+				? dim(theme, ` · 第 0 次循环`)
+				: "";
 
-		const labelColor = isRunning ? theme.fg("accent", s.label) : isDone ? theme.fg("success", s.label) : isFailed ? theme.fg("error", s.label) : s.label;
-		lines.push(` ${marker} ${icon} ${labelColor}${dur}${timeout}${durClose}${loop}`);
+		// Label color
+		const labelStyle = isRunning ? theme.fg("warning", s.label)
+			: isDone ? theme.fg("success", s.label)
+			: isFailed ? theme.fg("error", s.label)
+			: s.label;
 
-			// ── Sub-steps (agents) ──
-		// Sub-steps always show for the currently running step (no Ctrl+O needed)
-		if (s.subSteps && isRunning) {
-			for (const sub of s.subSteps) {
-				const subIcon =
-					sub.status === "done" ? theme.fg("success", "✓") :
-					sub.status === "running" ? theme.fg("accent", spinnerFrame()) :
-					sub.status === "failed" ? theme.fg("error", "✗") :
-					dim(theme, "◦");
+		// Build step line
+		let line: string;
+		if (isCurrent) {
+			// Current step: ▶ marker (position 0), spinner, label
+			line = `▶ ${icon} ${labelStyle}${loop}${durStr}${timeout}${durClose}`;
+		} else if (isDone) {
+			// Done step: 3 spaces indent, ✓, label (green)
+			line = `   ${icon} ${labelStyle}${durStr}${timeout}${durClose}`;
+		} else {
+			// Pending/skipped/failed: 2 spaces indent, icon, label
+			line = `  ${icon} ${labelStyle}${loop}${durStr}${timeout}${durClose}`;
+		}
+		lines.push(line);
 
-				const subDur = sub.durationMs != null ? dim(theme, ` ${formatDurationFull(sub.durationMs)}`) : "";
-				const subToken = sub.tokenCount ? dim(theme, ` · ${sub.tokenCount} tokens`) : "";
-				const subToolCount = sub.toolCount ? dim(theme, ` · ${sub.toolCount} tools`) : "";
+		// ── Sub-steps (agents with tree-format) ──
+		if (s.subSteps && s.subSteps.length > 0) {
+			// Agent indent depends on step type
+			// Current: 4 spaces | Done: 5 spaces | Pending: 4 spaces
+			const agentIndent = isDone ? "     " : "    ";
+			const toolIndent = "        "; // 8 spaces for all
 
-				lines.push(`   ${subIcon} ${dim(theme, "|__")} ${sub.agent}${subDur}${subToken}${subToolCount}`);
+			for (let si = 0; si < s.subSteps.length; si++) {
+				const sub = s.subSteps[si]!;
+				const isSubDone = sub.status === "done";
+				const isSubRunning = sub.status === "running";
+				const isSubPending = sub.status === "pending";
+				const isSubFailed = sub.status === "failed";
 
-				// Tool details: shown when tools are expanded (Ctrl+O toggles this)
-				if (expanded && sub.tools && sub.tools.length > 0) {
-					for (const tool of sub.tools) {
-						lines.push(`      ${dim(theme, `|   ${tool}`)}`);
+				// Sub-step icon
+				const subIcon = isSubDone ? theme.fg("success", "✓")
+					: isSubRunning ? theme.fg("accent", spinnerFrame())
+					: isSubFailed ? theme.fg("error", "✗")
+					: dim(theme, "◦");
+
+				// Agent line: "    |__ ✓ worker ·" or "    |__ ◦ trimmer ·"
+				lines.push(`${agentIndent}${dim(theme, "|__")} ${subIcon} ${sub.agent} ·`);
+
+				// Show tool/output content or "正在排队"
+				const showContent = isSubDone || isSubRunning || isSubFailed;
+				const showQueued = isSubPending;
+
+				if (showContent) {
+					// Collect all child items (tools + outputs)
+					const items: Array<{ text: string; isLast: boolean }> = [];
+
+					if (sub.tools && sub.tools.length > 0) {
+						for (let ti = 0; ti < sub.tools.length; ti++) {
+							items.push({
+								text: sub.tools[ti]!,
+								isLast: !sub.outputs?.length && ti === sub.tools.length - 1,
+							});
+						}
 					}
-				}
-
-				// Output paths: always shown
-				if (sub.outputs && sub.outputs.length > 0) {
-					const outIcon = sub.status === "done" ? theme.fg("success", "|__") : dim(theme, "|__");
-					for (const out of sub.outputs) {
-						lines.push(`      ${dim(theme, `${outIcon} output: ${out}`)}`);
+					if (sub.outputs && sub.outputs.length > 0) {
+						for (let oi = 0; oi < sub.outputs.length; oi++) {
+							items.push({
+								text: `output:${sub.outputs[oi]!}`,
+								isLast: oi === sub.outputs.length - 1,
+							});
+						}
 					}
-				}
 
-				// Free-form detail (shown when expanded)
-				if (expanded && sub.detail) {
-					for (const detailLine of sub.detail.split("\n")) {
-						lines.push(`        ${dim(theme, detailLine)}`);
+					// Show special sub-step detail if present (e.g. tool counts)
+					if (items.length === 0 && sub.detail) {
+						items.push({ text: sub.detail, isLast: true });
 					}
+
+					for (const item of items) {
+						const prefix = item.isLast ? dim(theme, "|__") : dim(theme, "|  ");
+						lines.push(`${toolIndent}${prefix} ${item.text}`);
+					}
+
+					// If no items and no detail (empty agent), show nothing extra
+				} else if (showQueued) {
+					lines.push(`${toolIndent}${dim(theme, "|__")} 正在排队`);
 				}
 			}
+		} else if (isPending) {
+			// Show placeholder agents for pending steps (pre-populated in workflow engine)
+			// If no subSteps but step is pending, it means agents are not yet started
+			// Show a generic queued indicator
+			const agentIndent = "    ";
+			const toolIndent = "        ";
+			lines.push(`${agentIndent}${dim(theme, "|__")} ${dim(theme, "◦")} 正在排队`);
 		}
 
 		// Error detail (always shown for failed steps)
@@ -409,7 +479,7 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 		}
 	}
 
-	// ── Stats line ──
+	// ── Stats line (if any) ──
 	const stats: string[] = [];
 	if (state.toolCount) stats.push(`${state.toolCount} tools`);
 	if (state.tokenCount) stats.push(`${state.tokenCount} tokens`);
@@ -417,12 +487,13 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 		lines.push(` ${dim(theme, stats.join(" · "))}`);
 	}
 
-	// ── Footer hints ──
+	// ── Footer hints (金色字体 for important shortcuts) ──
 	if (state.status === "running") {
+		const gold = (text: string) => theme.fg("warning", text);
 		if (!expanded) {
-			lines.push(` ${theme.fg("accent", "Ctrl+O 展开详情")} ${dim(theme, "|")} ${theme.fg("warning", "Esc/Ctrl+C 取消")}`);
+			lines.push(` ${gold("Ctrl+O 展开详情")} ${dim(theme, "|")} ${gold("Esc/Ctrl+C 取消")}`);
 		} else {
-			lines.push(` ${dim(theme, "Ctrl+O 折叠详情")} ${dim(theme, "|")} ${theme.fg("warning", "Esc/Ctrl+C 取消")}`);
+			lines.push(` ${dim(theme, "Ctrl+O 折叠详情")} ${dim(theme, "|")} ${gold("Esc/Ctrl+C 取消")}`);
 		}
 	}
 
@@ -530,7 +601,94 @@ export function cancelWorkflow(): void {
 // ── Send workflow result to session ──────────────────────────
 
 /**
+ * Helper: extract all file changes from step states for the completion report.
+ * Returns { edits, news, deletes } and a directory-tree formatted string.
+ */
+function extractFileChanges(
+	steps: WorkflowStepWidgetState[],
+): { edits: number; news: number; deletes: number; treeText: string } {
+	const editFiles: string[] = [];
+	const newFiles: string[] = [];
+	const delFiles: string[] = [];
+
+	for (const s of steps) {
+		if (!s.subSteps) continue;
+		for (const sub of s.subSteps) {
+			if (!sub.tools) continue;
+			for (const tool of sub.tools) {
+				const editMatch = tool.match(/^edit:\s*(.+)/i);
+				const newMatch = tool.match(/^new:\s*(.+)/i);
+				const delMatch = tool.match(/^delete:\s*(.+)/i);
+				if (editMatch && !editFiles.includes(editMatch[1]!)) editFiles.push(editMatch[1]!);
+				if (newMatch && !newFiles.includes(newMatch[1]!)) newFiles.push(newMatch[1]!);
+				if (delMatch && !delFiles.includes(delMatch[1]!)) delFiles.push(delMatch[1]!);
+			}
+		}
+	}
+
+	// Build directory tree from all files
+	const allFiles = [
+		...editFiles.map(f => ({ path: f, type: "edit" as const })),
+		...newFiles.map(f => ({ path: f, type: "new" as const })),
+		...delFiles.map(f => ({ path: f, type: "delete" as const })),
+	];
+
+	// Organize by directory
+	const dirTree = new Map<string, string[]>();
+	for (const f of allFiles) {
+		const dir = f.path.includes("/") ? f.path.substring(0, f.path.lastIndexOf("/")) : ".";
+		if (!dirTree.has(dir)) dirTree.set(dir, []);
+		dirTree.get(dir)!.push(f.path);
+	}
+
+	// Format as tree
+	const treeLines: string[] = [];
+	const sortedDirs = [...dirTree.keys()].sort();
+	for (let di = 0; di < sortedDirs.length; di++) {
+		const dir = sortedDirs[di]!;
+		const files = dirTree.get(dir)!;
+		const dirPrefix = di === sortedDirs.length - 1 ? "└── " : "├── ";
+		const filePrefix = di === sortedDirs.length - 1 ? "    " : "│   ";
+		treeLines.push(`${dirPrefix}${dir}`);
+		for (let fi = 0; fi < files.length; fi++) {
+			const isLastFile = fi === files.length - 1;
+			const fPrefix = isLastFile ? "└── " : "├── ";
+			const fileName = files[fi]!.includes("/") ? files[fi]!.substring(files[fi]!.lastIndexOf("/") + 1) : files[fi]!;
+			treeLines.push(`${filePrefix}${fPrefix}${fileName}`);
+		}
+	}
+
+	if (treeLines.length === 0) {
+		treeLines.push("(无文件变更)");
+	}
+
+	return {
+		edits: editFiles.length,
+		news: newFiles.length,
+		deletes: delFiles.length,
+		treeText: treeLines.join("\n"),
+	};
+}
+
+/**
+ * Helper: build a human-readable task summary from the prompt.
+ * Extracts the first line/type tag from the prompt.
+ */
+function extractTaskSummary(prompt: string): string {
+	const firstLine = prompt.split("\n").find(l => l.trim()) ?? "";
+	// Match [feat] xxx or [fix] xxx or similar
+	const tagMatch = firstLine.match(/^\[([^\]]+)\]\s*(.+)/);
+	if (tagMatch) {
+		return `${tagMatch[1]} - ${tagMatch[2]!.trim()}`;
+	}
+	// Fallback: first meaningful line (up to 60 chars)
+	const cleaned = firstLine.replace(/^[*\s#]+/, "").trim();
+	return cleaned.length > 60 ? cleaned.substring(0, 57) + "..." : cleaned || "工作流任务";
+}
+
+/**
  * Send a workflow completion message to the session for persistence.
+ * Design: 严格要求的完成后的新ui
  */
 export function sendWorkflowResult(
 	pi: ExtensionAPI,
@@ -546,7 +704,19 @@ export function sendWorkflowResult(
 	const resultIcon = state.status === "done" ? "🎉" : state.status === "failed" ? "❌" : "⏹️";
 	const statusText = state.status === "done" ? "全部完成" : state.status === "failed" ? "部分失败" : "已取消";
 
-	// Build step summary with sub-step details
+	// Count sub-agent runs (total sub-step executions)
+	let subAgentRuns = 0;
+	for (const s of state.steps) {
+		if (s.subSteps) subAgentRuns += s.subSteps.length;
+	}
+
+	// Extract file changes
+	const fileChanges = extractFileChanges(state.steps);
+
+	// Build task summary from prompt
+	const taskSummary = extractTaskSummary(prompt);
+
+	// Build step summary
 	const stepSummaryParts: string[] = [];
 	for (const s of state.steps) {
 		const icon = s.status === "done" ? "✅" :
@@ -555,38 +725,29 @@ export function sendWorkflowResult(
 		const durSuffix = s.durationMs != null ? ` (${formatDurationFull(s.durationMs)})` : "";
 		const loopSuffix = s.loopCount && s.loopCount > 1 ? ` x${s.loopCount}` : "";
 		const errSuffix = s.status === "failed" && s.error ? ` — ${s.error}` : "";
-
 		stepSummaryParts.push(`${icon} **${s.label}**${durSuffix}${loopSuffix}${errSuffix}`);
-
-		// Sub-step details
-		if (s.subSteps && s.subSteps.length > 0) {
-			for (const sub of s.subSteps) {
-				const subIcon = sub.status === "done" ? "  ✓" : sub.status === "failed" ? "  ✗" : "  ◦";
-				const subDetail = sub.detail ? ` — ${sub.detail}` : "";
-				stepSummaryParts.push(`   ${subIcon} ${sub.agent}${subDetail}`);
-				if (sub.outputs && sub.outputs.length > 0) {
-					for (const out of sub.outputs) {
-						stepSummaryParts.push(`     ⎿  output: \`${out}\``);
-					}
-				}
-			}
-		}
 	}
 
-	// Summary title
-	const modeLabel = state.mode === "full-auto" ? "全自动" : state.mode === "full-attended" ? "完全值守" : "值守";
+	// Format workflow type label
 	const typeLabel = workflowType ? ` - ${workflowType}` : "";
 
 	const body = [
 		`[dev-workflow-result${typeLabel}]`,
 		"",
+		`[${taskSummary}]`,
+		"",
 		`${resultIcon} **工作流${statusText}** (${totalDur})`,
 		"",
 		stepSummaryParts.join("\n"),
 		"",
-		`完成 ${doneCount}/${total} 步${failedCount > 0 ? `，${failedCount} 步失败` : ""}`,
-		state.toolCount ? `\n工具调用: ${state.toolCount} 次` : "",
-		state.tokenCount ? `\nToken: ${state.tokenCount}` : "",
+		"变动文件：",
+		"```",
+		fileChanges.treeText,
+		"```",
+		"",
+		`完成 ${doneCount}/${total} 步子代理任务，修改 ${fileChanges.edits} 个文件，新增 ${fileChanges.news} 个文件` +
+			(fileChanges.deletes > 0 ? `，删除 ${fileChanges.deletes} 个文件` : "") +
+			(failedCount > 0 ? `，${failedCount} 步失败` : ""),
 	].join("\n");
 
 	try {
@@ -600,6 +761,9 @@ export function sendWorkflowResult(
 				durationMs: Date.now() - state.startedAt,
 				workflowType,
 				prompt,
+				taskSummary,
+				fileChanges: { edits: fileChanges.edits, news: fileChanges.news, deletes: fileChanges.deletes },
+				subAgentRuns,
 			},
 		});
 	} catch {
