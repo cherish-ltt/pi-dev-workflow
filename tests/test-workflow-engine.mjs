@@ -223,9 +223,9 @@ assert(
 	"FEAT_WORKFLOW_STEPS 应包含 planner agent",
 );
 
-// 检查 loop-group 类型的工作流步骤
+// 检查 loop-group 类型的工作流步骤（全部配置合计）
 const loopGroupCount = (devPrompts.match(/type: "loop-group"/g) || []).length;
-assertEq(loopGroupCount, 2, "FEAT_WORKFLOW_STEPS 应包含 2 个 loop-group 步骤");
+assertEq(loopGroupCount, 8, "所有 WORKFLOW_STEPS 合计应包含 8 个 loop-group 步骤");
 
 // 检查 confirm 类型
 assert(

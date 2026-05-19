@@ -399,6 +399,144 @@ const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
 	},
 ];
 
+/** /dev-fix: planner -> {worker->reviewer} -> [docWriter] */
+const FIX_WORKFLOW_STEPS: WorkflowStepDef[] = [
+	{
+		id: "planner",
+		label: "📋 分析根因并制定修复计划",
+		type: "auto",
+		agentName: "planner",
+		timeoutMs: 900_000,
+	},
+	{
+		id: "worker-reviewer",
+		label: "🔧 修复代码 → 审查",
+		type: "loop-group",
+		loopAgentName: "worker",
+		reviewAgentName: "reviewer",
+		maxLoops: 3,
+		timeoutMs: 900_000,
+	},
+	{
+		id: "docWriter",
+		label: "📝 更新文档",
+		type: "confirm",
+		agentName: "docWriter",
+		timeoutMs: 300_000,
+	},
+];
+
+/** /dev-refactor: planner -> {worker->reviewer} -> {trimmer->reviewer} */
+const REFACTOR_WORKFLOW_STEPS: WorkflowStepDef[] = [
+	{
+		id: "planner",
+		label: "📋 分析重构计划",
+		type: "auto",
+		agentName: "planner",
+		timeoutMs: 900_000,
+	},
+	{
+		id: "worker-reviewer",
+		label: "🔧 重构代码 → 审查",
+		type: "loop-group",
+		loopAgentName: "worker",
+		reviewAgentName: "reviewer",
+		maxLoops: 3,
+		timeoutMs: 900_000,
+	},
+	{
+		id: "trimmer-reviewer",
+		label: "✂️ 精简代码 → 审查",
+		type: "loop-group",
+		loopAgentName: "trimmer",
+		reviewAgentName: "reviewer",
+		maxLoops: 3,
+		timeoutMs: 300_000,
+	},
+];
+
+/** /dev-perf: planner -> {worker->reviewer} */
+const PERF_WORKFLOW_STEPS: WorkflowStepDef[] = [
+	{
+		id: "planner",
+		label: "📋 分析性能问题并制定优化计划",
+		type: "auto",
+		agentName: "planner",
+		timeoutMs: 900_000,
+	},
+	{
+		id: "worker-reviewer",
+		label: "⚡ 优化代码 → 审查",
+		type: "loop-group",
+		loopAgentName: "worker",
+		reviewAgentName: "reviewer",
+		maxLoops: 3,
+		timeoutMs: 900_000,
+	},
+];
+
+/** /dev-test: planner -> {worker->reviewer} */
+const TEST_WORKFLOW_STEPS: WorkflowStepDef[] = [
+	{
+		id: "planner",
+		label: "📋 分析测试计划",
+		type: "auto",
+		agentName: "planner",
+		timeoutMs: 900_000,
+	},
+	{
+		id: "worker-reviewer",
+		label: "🧪 编写测试 → 审查",
+		type: "loop-group",
+		loopAgentName: "worker",
+		reviewAgentName: "reviewer",
+		maxLoops: 3,
+		timeoutMs: 900_000,
+	},
+];
+
+/** /dev-doc: planner -> docWriter */
+const DOC_WORKFLOW_STEPS: WorkflowStepDef[] = [
+	{
+		id: "planner",
+		label: "📋 分析文档需求",
+		type: "auto",
+		agentName: "planner",
+		timeoutMs: 900_000,
+	},
+	{
+		id: "docWriter",
+		label: "📝 撰写文档",
+		type: "auto",
+		agentName: "docWriter",
+		timeoutMs: 300_000,
+	},
+];
+
+/** /dev-style: trimmer -> reviewer */
+const STYLE_WORKFLOW_STEPS: WorkflowStepDef[] = [
+	{
+		id: "trimmer-reviewer",
+		label: "✂️ 风格调整 → 审查",
+		type: "loop-group",
+		loopAgentName: "trimmer",
+		reviewAgentName: "reviewer",
+		maxLoops: 2,
+		timeoutMs: 300_000,
+	},
+];
+
+/** /dev-security: reviewer */
+const SECURITY_WORKFLOW_STEPS: WorkflowStepDef[] = [
+	{
+		id: "reviewer",
+		label: "🔒 安全审查",
+		type: "auto",
+		agentName: "reviewer",
+		timeoutMs: 300_000,
+	},
+];
+
 // ── Command runner ───────────────────────────────────────────
 
 /**
@@ -445,7 +583,19 @@ async function runWizardWithGrill(
 		finalPrompt = grillResult.enhancedPrompt;
 	}
 
-	// ── Guard & persist before sending ───────────────────────
+	// ── Workflow phase ───────────────────────────
+	if (workflowConfig && workflowConfig.steps.length > 0) {
+		const enterWorkflow = await ctx.ui.confirm(
+			"🚀 进入自动化工作流",
+			`是否进入自动化工作流？\n\n工作流将自动执行以下步骤：\n${formatWorkflowSteps(workflowConfig.steps)}\n\n选择「否」将直接发送 prompt 给主代理（传统模式）。`,
+		);
+		if (enterWorkflow) {
+			await runWorkflow(ctx, pi, finalPrompt, workflowConfig);
+			return;
+		}
+	}
+
+	// ── Guard & persist before sending ──────────────────────
 	if (!finalPrompt) {
 		ctx.ui.notify("⚠️ 最终提示词为空，正在尝试从备份文件恢复...", "warning");
 		const recovered = recoverFromBackup(ctx.cwd);
@@ -495,7 +645,18 @@ async function runWizard(
 	}
 
 	const prompt = assembler(answers);
-	ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
+
+	// ── Workflow phase ───────────────────────────
+	if (workflowConfig && workflowConfig.steps.length > 0) {
+		const enterWorkflow = await ctx.ui.confirm(
+			"🚀 进入自动化工作流",
+			`是否进入自动化工作流？\n\n工作流将自动执行以下步骤：\n${formatWorkflowSteps(workflowConfig.steps)}\n\n选择「否」将直接发送 prompt 给主代理（传统模式）。`,
+		);
+		if (enterWorkflow) {
+			await runWorkflow(ctx, pi, prompt, workflowConfig);
+			return;
+		}
+	}
 
 	// Send the assembled prompt to the main agent
 	pi.sendUserMessage(prompt, { deliverAs: "followUp" });
@@ -692,6 +853,7 @@ export default function (pi: ExtensionAPI) {
 					questionTitle: "文档大纲评审",
 					loaderLabel: "🧠 AI 正在分析并生成文档大纲评审问题...",
 				},
+				{ steps: DOC_WORKFLOW_STEPS },
 			);
 		},
 	});
@@ -710,6 +872,7 @@ export default function (pi: ExtensionAPI) {
 					questionTitle: "重构方案评审",
 					loaderLabel: "🧠 AI 正在分析代码并生成重构评审问题...",
 				},
+				{ steps: REFACTOR_WORKFLOW_STEPS },
 			);
 		},
 	});
@@ -728,6 +891,7 @@ export default function (pi: ExtensionAPI) {
 					questionTitle: "测试计划评审",
 					loaderLabel: "🧠 AI 正在分析并生成测试评审问题...",
 				},
+				{ steps: TEST_WORKFLOW_STEPS },
 			);
 		},
 	});
@@ -754,6 +918,7 @@ export default function (pi: ExtensionAPI) {
 					questionTitle: "性能优化方案评审",
 					loaderLabel: "🧠 AI 正在分析并生成性能优化评审问题...",
 				},
+				{ steps: PERF_WORKFLOW_STEPS },
 			);
 		},
 	});
@@ -762,7 +927,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("dev-style", {
 		description: "(prompt wizard) 风格/格式调整 — 交互填写后发送优化提示词给主代理",
 		handler: async (_args, ctx) => {
-			await runWizard(ctx, pi, "style", "风格/格式调整", STYLE_QUESTIONS, assembleStylePrompt);
+			await runWizard(ctx, pi, "style", "风格/格式调整", STYLE_QUESTIONS, assembleStylePrompt, { steps: STYLE_WORKFLOW_STEPS });
 		},
 	});
 
@@ -770,7 +935,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("dev-security", {
 		description: "(prompt wizard) 安全审查 — 交互填写后发送优化提示词给主代理",
 		handler: async (_args, ctx) => {
-			await runWizard(ctx, pi, "security", "安全审查", SECURITY_QUESTIONS, assembleSecurityPrompt);
+			await runWizard(ctx, pi, "security", "安全审查", SECURITY_QUESTIONS, assembleSecurityPrompt, { steps: SECURITY_WORKFLOW_STEPS });
 		},
 	});
 
