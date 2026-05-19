@@ -23,41 +23,67 @@ import { spawnSubagent, extractFinalOutput, discoverAgents, type AgentDef, type 
 //  Types
 // ═══════════════════════════════════════════════════════════════
 
+/** 工作流的三种运行模式 */
 export type WorkflowMode = "attended" | "full-auto" | "full-attended";
 
+/**
+ * 工作流单步定义。
+ * 在 dev-prompts.ts 中为每个 /dev-* 命令预定义步骤链。
+ */
 export interface WorkflowStepDef {
+	/** 步骤唯一标识，用于 checkpoint 恢复时关联 loopCounts */
 	id: string;
+	/** 在进度面板中显示的可读标签 */
 	label: string;
-	/** 'auto' = 自动执行, 'confirm' = 需要用户确认 ([]), 'loop-group' = {} 循环组 */
+	/**
+	 * 步骤类型：
+	 * - 'auto' — 自动执行，无需用户确认
+	 * - 'confirm' — 需要用户确认是否执行（[] 标记）
+	 * - 'loop-group' — {} 循环组：执行实施 agent → 审查 agent → 按需循环
+	 */
 	type: "auto" | "confirm" | "loop-group";
-	/** 单步骤 agent 名（auto / confirm 类型） */
+	/** auto/confirm 类型步骤对应的 agent 名 */
 	agentName?: string;
-	/** loop 组的实施 agent 名（worker / trimmer） */
+	/** loop-group 中实施阶段的 agent 名（worker / trimmer） */
 	loopAgentName?: string;
-	/** loop 组的审查 agent 名（reviewer） */
+	/** loop-group 中审查阶段的 agent 名（reviewer） */
 	reviewAgentName?: string;
-	/** loop 最大次数（默认 3） */
+	/** loop-group 最大循环次数，默认 3 */
 	maxLoops?: number;
-	/** 超时毫秒 */
+	/** 步骤超时毫秒数，超时后根据 mode 走不同策略 */
 	timeoutMs: number;
 }
 
+/** 运行时步骤状态，用于 checkpoint 持久化和进度面板显示 */
 interface WorkflowStepState {
 	status: "pending" | "running" | "done" | "failed" | "skipped";
 	durationMs?: number;
+	/** loop-group 实际执行次数 */
 	loopCount?: number;
 	error?: string;
 }
 
+/**
+ * Checkpoint 数据结构。
+ * 保存到 pi-dev-output/pi-workflow/checkpoint.json，
+ * 在中断恢复时重新加载。
+ */
 interface CheckpointData {
 	version: 1;
+	/** 工作流首次创建的 ISO 时间 */
 	createdAt: string;
+	/** 最近一次 checkpoint 保存的 ISO 时间 */
 	updatedAt: string;
+	/** 原始用户 prompt（含 grill 评审记录） */
 	prompt: string;
 	mode: WorkflowMode;
+	/** 每个步骤的运行时状态快照 */
 	steps: WorkflowStepState[];
+	/** 下一个要执行的步骤索引 */
 	currentStepIndex: number;
+	/** loop-group 的循环次数记录（keyed by step.id） */
 	loopCounts: Record<string, number>;
+	/** planner 生成的 plan 文件相对路径（如有） */
 	planFilePath?: string;
 }
 
@@ -136,6 +162,7 @@ export function parseReviewerOutput(
 	return null;
 }
 
+/** 判断 subagent 结果是否为超时退出 */
 export function isTimeoutResult(r: SubagentResult): boolean {
 	return r.exitCode === -1 && r.stderr.includes("timed out");
 }
@@ -144,12 +171,14 @@ export function isTimeoutResult(r: SubagentResult): boolean {
 //  Checkpoint
 // ═══════════════════════════════════════════════════════════════
 
+/** 将当前工作流状态写入 checkpoint 文件 */
 function saveCheckpoint(cwd: string, data: CheckpointData): void {
 	ensureOutputDir(cwd, "pi-workflow");
 	data.updatedAt = new Date().toISOString();
 	fs.writeFileSync(path.join(cwd, CHECKPOINT_FILE), JSON.stringify(data, null, 2), "utf-8");
 }
 
+/** 从文件加载 checkpoint，不存在或损坏时返回 null */
 export function loadCheckpointFromFile(cwd: string): CheckpointData | null {
 	try {
 		const content = fs.readFileSync(path.join(cwd, CHECKPOINT_FILE), "utf-8");
@@ -159,6 +188,7 @@ export function loadCheckpointFromFile(cwd: string): CheckpointData | null {
 	}
 }
 
+/** 删除 checkpoint 文件（工作流完成后清理） */
 export function deleteCheckpointFile(cwd: string): void {
 	try { fs.unlinkSync(path.join(cwd, CHECKPOINT_FILE)); } catch { /* ignore */ }
 }
@@ -167,6 +197,7 @@ export function deleteCheckpointFile(cwd: string): void {
 //  Progress display
 // ═══════════════════════════════════════════════════════════════
 
+/** 在 TUI 中渲染工作流进度面板 */
 function showProgress(
 	ctx: ExtensionCommandContext,
 	steps: WorkflowStepDef[],
@@ -194,6 +225,10 @@ function showProgress(
 //  Agent runner with progress
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * 在 BorderedLoader 中启动 sub-agent 并实时更新进度文本。
+ * 用户可通过 Ctrl+C 等中止操作。
+ */
 async function runAgentWithProgress(
 	ctx: ExtensionCommandContext,
 	agent: AgentDef,
@@ -230,6 +265,7 @@ async function runAgentWithProgress(
 //  Task builders
 // ═══════════════════════════════════════════════════════════════
 
+/** 根据 agent 角色构建对应的任务描述文本 */
 function buildTaskForStep(
 	agentName: string,
 	prompt: string,
@@ -293,6 +329,7 @@ function buildTaskForStep(
 	return prompt;
 }
 
+/** 为 reviewer agent 构建审查任务描述，包含 [REVIEW_SUMMARY] 格式要求 */
 function buildReviewTask(
 	prompt: string,
 	planFileRelPath: string | undefined,
@@ -319,6 +356,10 @@ function buildReviewTask(
 //  Single-step executor
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * 执行一个非 loop-group 的单步骤（auto / confirm 类型）。
+ * 包含超时检测和重试逻辑。
+ */
 async function executeSingleStep(
 	ctx: ExtensionCommandContext,
 	step: WorkflowStepDef,
@@ -383,6 +424,11 @@ async function executeSingleStep(
 //  Loop-group executor
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * 执行 {} 标记的 loop-group 步骤。
+ * 循环执行：实施 agent → 审查 agent，直到无 critical 问题或达最大次数。
+ * 每次循环将上次审查发现的问题注入下次实施上下文。
+ */
 async function executeLoopGroup(
 	ctx: ExtensionCommandContext,
 	step: WorkflowStepDef,
@@ -530,10 +576,17 @@ export interface WorkflowConfig {
 /**
  * 运行完整工作流。
  *
+ * 流程：
+ * 1. 加载 workflow agent 定义并验证必需 agent 存在
+ * 2. 检测并恢复 checkpoint（断点续传）或选择运行模式
+ * 3. 按步骤顺序执行每个步骤（auto/confirm/loop-group）
+ * 4. 每步完成后保存 checkpoint
+ * 5. 全部完成后清理 checkpoint
+ *
  * @param ctx   命令上下文
  * @param pi    Extension API
  * @param prompt  用户原始 prompt（已含 grill 评审记录）
- * @param config  工作流步骤配置
+ * @param config  工作流步骤配置（来自 dev-prompts.ts 的 WORKFLOW_STEPS 常量）
  */
 export async function runWorkflow(
 	ctx: ExtensionCommandContext,
