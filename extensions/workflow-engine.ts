@@ -162,6 +162,28 @@ export function parseReviewerOutput(
 	return null;
 }
 
+/**
+ * 从 reviewer 生成的审查 MD 文件中读取 [REVIEW_SUMMARY] 块。
+ * 兜底方案：当 reviewer agent 的输出中找不到摘要时，直接读取审查文件。
+ */
+export function parseReviewerOutputFromFile(
+	cwd: string,
+): { maxSeverity: string; critical: number; medium: number; low: number } | null {
+	const reviewDir = path.join(cwd, DEV_OUTPUT_DIR, "pi-review", "md");
+	try {
+		if (!fs.existsSync(reviewDir)) return null;
+		const files = fs.readdirSync(reviewDir)
+			.filter(f => f.endsWith(".md"))
+			.map(f => ({ name: f, mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs }))
+			.sort((a, b) => b.mtime - a.mtime);
+		if (files.length === 0) return null;
+		const content = fs.readFileSync(path.join(reviewDir, files[0].name), "utf-8");
+		return parseReviewerOutput(content);
+	} catch {
+		return null;
+	}
+}
+
 /** 判断 subagent 结果是否为超时退出 */
 export function isTimeoutResult(r: SubagentResult): boolean {
 	return r.exitCode === -1 && r.stderr.includes("timed out");
@@ -513,8 +535,15 @@ async function executeLoopGroup(
 			`审查 ${step.loopAgentName}`, loopStartTime, step.timeoutMs,
 		);
 
-		const combinedOutput = reviewResult.output + "\n" + reviewResult.stderr;
-		const reviewSummary = parseReviewerOutput(combinedOutput);
+		// fix: subagent 输出为 JSON 格式，需先提取纯文本再解析 REVIEW_SUMMARY
+		const extractedOutput = extractFinalOutput(reviewResult.output) || reviewResult.output;
+		const combinedOutput = extractedOutput + "\n" + reviewResult.stderr;
+		let reviewSummary = parseReviewerOutput(combinedOutput);
+
+		// fallback: 若输出中找不到 REVIEW_SUMMARY，直接读取审查文件
+		if (!reviewSummary) {
+			reviewSummary = parseReviewerOutputFromFile(ctx.cwd);
+		}
 
 		const sev = reviewSummary?.maxSeverity ?? "low";
 		ctx.ui.notify(

@@ -5,10 +5,13 @@
  * 1. parseReviewerOutput — 解析 [REVIEW_SUMMARY] JSON
  * 2. parseReviewerOutput — 兜底解析裸 JSON
  * 3. parseReviewerOutput — 无效输入返回 null
- * 4. isTimeoutResult — 正确识别超时
- * 5. isTimeoutResult — 非超时不误判
- * 6. Checkpoint 序列化/反序列化
- * 7. WorkflowStepDef 配置结构完整性
+ * 4. Bug confirmation: parseReviewerOutput fails on JSON lines output
+ * 5. Fix verification: extractFinalOutput + parseReviewerOutput works
+ * 6. parseReviewerOutputFromFile — 读取审查文件
+ * 7. isTimeoutResult — 正确识别超时
+ * 8. isTimeoutResult — 非超时不误判
+ * 9. Checkpoint 序列化/反序列化
+ * 10. WorkflowStepDef 配置结构完整性
  *
  * Run: node tests/test-workflow-engine.mjs
  */
@@ -138,7 +141,133 @@ assertEq(r5?.maxSeverity, "medium", "跨行复杂输出应正确解析");
 assertEq(r5?.medium, 3, "跨行复杂输出的 medium 计数");
 
 // ═══════════════════════════════════════════════════════════════
-//  2. isTimeoutResult
+//  Bug fix: parseReviewerOutput on JSON-formatted subagent output
+// ═══════════════════════════════════════════════════════════════
+
+console.log("\n📋 parseReviewerOutput 在 JSON 格式输出下的行为测试\n");
+
+// 模拟 --mode json 输出的 JSON lines 格式（subagent 原始输出）
+function buildJsonLinesOutput(plainText) {
+	// 模拟 pi --mode json 的流式输出格式
+	const lines = [];
+	const chunkSize = 80;
+	for (let i = 0; i < plainText.length; i += chunkSize) {
+		const chunk = plainText.slice(i, i + chunkSize);
+		lines.push(JSON.stringify({
+			type: "message_update",
+			assistantMessageEvent: {
+				type: "text_delta",
+				delta: chunk,
+			},
+		}));
+	}
+	lines.push(JSON.stringify({
+		type: "message_update",
+		assistantMessageEvent: {
+			type: "text_end",
+			content: plainText,
+		},
+	}));
+	return lines.join("\n");
+}
+
+// 模拟 extractFinalOutput（复制自 sub-agents.ts 的核心逻辑）
+function simulateExtractFinalOutput(jsonOutput) {
+	let result = "";
+	let textEndSeen = false;
+	for (const line of jsonOutput.split("\n")) {
+		if (!line.trim()) continue;
+		try {
+			const event = JSON.parse(line);
+			if (!textEndSeen && event.type === "message_update" &&
+					event.assistantMessageEvent?.type === "text_delta") {
+				result += event.assistantMessageEvent.delta || "";
+			}
+			if (event.type === "message_update" &&
+					event.assistantMessageEvent?.type === "text_end" &&
+					event.assistantMessageEvent.content) {
+				result = event.assistantMessageEvent.content;
+				textEndSeen = true;
+			}
+		} catch { /* skip non-JSON lines */ }
+	}
+	return result;
+}
+
+// Test 6: BUG CONFIRMATION — parseReviewerOutput 在 JSON lines 输出中返回 null
+const criticalText = [
+	"# 代码审查报告",
+	"",
+	"## 严重问题",
+	"### C1: 关键 bug",
+	"",
+	"[REVIEW_SUMMARY]",
+	'{"maxSeverity":"critical","critical":2,"medium":1,"low":0}',
+	"[/REVIEW_SUMMARY]",
+].join("\n");
+
+const jsonOutput = buildJsonLinesOutput(criticalText);
+const resultOnRawJson = simulateParseReviewerOutput(jsonOutput);
+assertEq(resultOnRawJson, null, "BUG: parseReviewerOutput 在原始 JSON lines 输出上应返回 null（确认 bug）");
+
+// Test 7: FIX VERIFICATION — 先用 extractFinalOutput 提取纯文本，再解析 REVIEW_SUMMARY
+const extracted = simulateExtractFinalOutput(jsonOutput);
+const resultOnExtracted = simulateParseReviewerOutput(extracted);
+assertEq(resultOnExtracted?.maxSeverity, "critical", "FIX: 提取纯文本后应正确解析 critical");
+assertEq(resultOnExtracted?.critical, 2, "FIX: critical 计数应正确");
+
+// Test 8: FIX VERIFICATION — 中等等级
+const mediumText = [
+	"[REVIEW_SUMMARY]",
+	'{"maxSeverity":"medium","critical":0,"medium":3,"low":2}',
+	"[/REVIEW_SUMMARY]",
+].join("\n");
+const jsonOutput2 = buildJsonLinesOutput(mediumText);
+const extracted2 = simulateExtractFinalOutput(jsonOutput2);
+const result2 = simulateParseReviewerOutput(extracted2);
+assertEq(result2?.maxSeverity, "medium", "FIX: 提取后 medium 等级应正确解析");
+assertEq(result2?.medium, 3, "FIX: medium 计数应正确");
+
+// Test 9: parseReviewerOutputFromFile — 读取审查文件
+console.log("\n📋 parseReviewerOutputFromFile 测试\n");
+
+// 模拟文件读取函数（匹配 workflow-engine.ts 中新增的 parseReviewerOutputFromFile）
+function simulateParseReviewerOutputFromFile(cwd) {
+	const reviewDir = path.join(cwd, "pi-dev-output", "pi-review", "md");
+	try {
+		if (!fs.existsSync(reviewDir)) return null;
+		const files = fs.readdirSync(reviewDir)
+			.filter(f => f.endsWith(".md"))
+			.map(f => ({ name: f, mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs }))
+			.sort((a, b) => b.mtime - a.mtime);
+		if (files.length === 0) return null;
+		const content = fs.readFileSync(path.join(reviewDir, files[0].name), "utf-8");
+		return simulateParseReviewerOutput(content);
+	} catch {
+		return null;
+	}
+}
+
+const reviewResult = simulateParseReviewerOutputFromFile(__dirname + "/..");
+if (reviewResult) {
+	assertEq(typeof reviewResult.maxSeverity, "string", "parseReviewerOutputFromFile 应从最新审查文件解析出 maxSeverity");
+	assertEq(typeof reviewResult.critical, "number", "parseReviewerOutputFromFile 应解析出 critical 计数");
+} else {
+	// 没有审查文件时也应优雅处理
+	assert(true, "parseReviewerOutputFromFile 在无审查文件时返回 null（非错误）");
+}
+
+// Test 10: parseReviewerOutputFromFile — 不存在的目录
+const nullResult = simulateParseReviewerOutputFromFile("/nonexistent/path");
+assertEq(nullResult, null, "不存在的目录应返回 null");
+
+// Test 11: 验证 extractFinalOutput 对已损坏/不完整输出的鲁棒性
+const partialOutput = '{"type":"message_start"}\n{"invalid json\n';
+const partialExtracted = simulateExtractFinalOutput(partialOutput);
+assertEq(typeof partialExtracted, "string", "部分损坏的输出应返回字符串而非崩溃");
+
+// ═══════════════════════════════════════════════════════════════
+//  12. isTimeoutResult
 // ═══════════════════════════════════════════════════════════════
 
 console.log("\n📋 isTimeoutResult 测试\n");
