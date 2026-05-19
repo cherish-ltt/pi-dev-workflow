@@ -70,9 +70,10 @@ function loadAppendSystem(cwd: string): string | null {
 	return null;
 }
 
-/** Find the newest HTML review file in pi-review/ or pi-dev-output/pi-review/ directory. */
+/** Find the newest HTML review file in pi-dev-output/pi-review/html/, pi-review/, or pi-dev-output/pi-review/ directory. */
 function findNewestReviewHtml(cwd: string): string {
 	const candidates = [
+		path.join(cwd, "pi-dev-output", "pi-review", "html"),
 		path.join(cwd, "pi-review"),
 		path.join(cwd, "pi-dev-output", "pi-review"),
 	];

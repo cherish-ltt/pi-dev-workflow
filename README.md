@@ -91,7 +91,7 @@ pi-package/
 | **3** / Esc | 不是审查（放行给主代理） | 不启动子代理，原消息交给主 AI 处理 |
 
 也支持 `/skill:review-html` 直接触发阻塞审查。
-审查结果以交互式 HTML 报告形式写入 `pi-review/` 目录。
+审查结果以交互式 HTML 报告形式写入 `pi-dev-output/pi-review/html/` 目录。
 
 ### subagent 工具
 

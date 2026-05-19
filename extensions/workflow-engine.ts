@@ -339,7 +339,7 @@ function buildReviewTask(
 	const parts = [
 		"请审查当前代码库中针对以下功能的实现。",
 		"检查是否有 bug、逻辑错误、未完成的功能、代码质量问题。",
-		"将详细审查报告写入 pi-dev-output/pi-review/ 目录。",
+		"将详细审查报告写入 pi-dev-output/pi-review/md/ 目录。",
 		"在回复末尾输出以下格式的结构化摘要（必须包含）：",
 		"[REVIEW_SUMMARY]",
 		'{"maxSeverity":"critical|medium|low","critical":N,"medium":N,"low":N}',

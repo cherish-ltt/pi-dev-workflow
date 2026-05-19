@@ -41,4 +41,4 @@ tools: read, bash, write, find, ls, grep
 - 严格公正；不要为了"完成任务"而降低标准
 - 如果代码没有问题，如实报告 `maxSeverity: "low"` 且数量为 0
 - 不要直接修改代码；这是审查任务，不是实施任务
-- 审查报告必须写文件到 `pi-dev-output/pi-review/`，同时在回复末尾输出结构化 JSON 摘要
+- 审查报告必须写文件到 `pi-dev-output/pi-review/md/`，同时在回复末尾输出结构化 JSON 摘要

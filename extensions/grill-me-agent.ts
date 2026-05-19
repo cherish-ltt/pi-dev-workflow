@@ -55,6 +55,8 @@ export interface PRDResult {
 
 const DEV_OUTPUT_DIR = "pi-dev-output";
 const GRILL_DIRNAME = "pi-grill";
+const GRILL_ANSWERS_DIRNAME = "answers";
+const GRILL_QUESTIONS_DIRNAME = "questions";
 const PRD_DIRNAME = "pi-prd";
 
 /** Ensure an output subdirectory exists and write .gitignore. */
@@ -73,31 +75,43 @@ function ensureOutputDir(cwd: string, subdir: string): string {
 	return dir;
 }
 
-/** Generate a safe temp filename for grill output. */
+/** Format current time as YYYYMMDD-HHmm for human-readable timestamps. */
+function formatTimestamp(): string {
+	const now = new Date();
+	const Y = now.getFullYear().toString();
+	const M = (now.getMonth() + 1).toString().padStart(2, "0");
+	const D = now.getDate().toString().padStart(2, "0");
+	const h = now.getHours().toString().padStart(2, "0");
+	const m = now.getMinutes().toString().padStart(2, "0");
+	return `${Y}${M}${D}-${h}${m}`;
+}
+
+/** Generate a safe temp filename for grill output (pi-grill/questions/questions-<id>-<YYYYMMDD-HHmm>.json). */
 function grillOutputPath(cwd: string): string {
-	const dir = ensureOutputDir(cwd, GRILL_DIRNAME);
+	const dir = ensureOutputDir(cwd, path.join(GRILL_DIRNAME, GRILL_QUESTIONS_DIRNAME));
 	const ts = Date.now().toString(36);
-	return path.join(dir, `questions-${ts}.json`);
+	return path.join(dir, `questions-${ts}-${formatTimestamp()}.json`);
 }
 
 /**
- * Save the final assembled prompt to a timestamped answer file.
+ * Save the final assembled prompt to a timestamped answer file (pi-grill/answers/answer-<id>-<YYYYMMDD-HHmm>.md).
  * Returns the relative path from cwd (for display in notifications).
  */
 export function saveAnswerFile(cwd: string, content: string): string {
-	const dir = ensureOutputDir(cwd, GRILL_DIRNAME);
+	const dir = ensureOutputDir(cwd, path.join(GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME));
 	const ts = Date.now().toString(36);
-	const filename = `answer-${ts}.md`;
+	const filename = `answer-${ts}-${formatTimestamp()}.md`;
 	fs.writeFileSync(path.join(dir, filename), content, "utf-8");
-	return path.join(DEV_OUTPUT_DIR, GRILL_DIRNAME, filename);
+	return path.join(DEV_OUTPUT_DIR, GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME, filename);
 }
 
 /**
  * Find the most recent answer backup file and read its content.
  * Returns undefined if no backup exists or read fails.
+ * Now reads from pi-grill/answers/ subdirectory.
  */
 export function recoverFromBackup(cwd: string): string | undefined {
-	const dir = path.join(cwd, DEV_OUTPUT_DIR, GRILL_DIRNAME);
+	const dir = path.join(cwd, DEV_OUTPUT_DIR, GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME);
 	try {
 		if (!fs.existsSync(dir)) return undefined;
 		const files = fs.readdirSync(dir)
