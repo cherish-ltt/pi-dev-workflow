@@ -288,10 +288,8 @@ let _widgetState: WorkflowWidgetState | null = null;
 let _widgetAnimationTimer: ReturnType<typeof setInterval> | null = null;
 let _lastWidgetCtx: ExtensionCommandContext | null = null;
 
-/** Independent expanded state for the widget's sub-agent details (Ctrl+O toggles this) */
+/** Tracks pi's tools panel expanded state (Ctrl+O toggles it, widget mirrors it) */
 let _widgetExpanded = false;
-/** Previous tools expanded state for detecting Ctrl+O in animation loop */
-let _prevToolsExpanded = false;
 
 /** Callback invoked when user presses Esc to cancel */
 let _onCancelWorkflow: (() => void) | null = null;
@@ -363,8 +361,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 		const labelColor = isRunning ? theme.fg("accent", s.label) : isDone ? theme.fg("success", s.label) : isFailed ? theme.fg("error", s.label) : s.label;
 		lines.push(` ${marker} ${icon} ${labelColor}${dur}${timeout}${durClose}${loop}`);
 
-		// ── Sub-steps (agents) ──
-		// Sub-steps are only shown for the currently running step
+			// ── Sub-steps (agents) ──
+		// Sub-steps always show for the currently running step (no Ctrl+O needed)
 		if (s.subSteps && isRunning) {
 			for (const sub of s.subSteps) {
 				const subIcon =
@@ -379,14 +377,14 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 
 				lines.push(`   ${subIcon} ${dim(theme, "|__")} ${sub.agent}${subDur}${subToken}${subToolCount}`);
 
-				// Tool details: only for the current step when Ctrl+O expanded
-				if (isCurrent && expanded && sub.tools && sub.tools.length > 0) {
+				// Tool details: shown when tools are expanded (Ctrl+O toggles this)
+				if (expanded && sub.tools && sub.tools.length > 0) {
 					for (const tool of sub.tools) {
 						lines.push(`      ${dim(theme, `|   ${tool}`)}`);
 					}
 				}
 
-				// Output paths (always shown for done/running sub-steps)
+				// Output paths: always shown
 				if (sub.outputs && sub.outputs.length > 0) {
 					const outIcon = sub.status === "done" ? theme.fg("success", "|__") : dim(theme, "|__");
 					for (const out of sub.outputs) {
@@ -394,8 +392,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 					}
 				}
 
-				// Free-form detail (only for current step when expanded)
-				if (isCurrent && expanded && sub.detail) {
+				// Free-form detail (shown when expanded)
+				if (expanded && sub.detail) {
 					for (const detailLine of sub.detail.split("\n")) {
 						lines.push(`        ${dim(theme, detailLine)}`);
 					}
@@ -403,8 +401,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 			}
 		}
 
-		// Error detail (expanded only)
-		if (isFailed && s.error && expanded) {
+		// Error detail (always shown for failed steps)
+		if (isFailed && s.error) {
 			for (const errLine of s.error.split("\n")) {
 				lines.push(`    ${theme.fg("error", errLine)}`);
 			}
@@ -433,56 +431,24 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
 
 /**
  * Build the widget component factory for the current state.
- * Returns a factory function (tui, theme) => Component with handleInput support.
- * handleInput intercepts Ctrl+O to toggle the widget's internal expanded state
- * (showing/hiding sub-agent details without affecting the main tools panel).
+ * Returns a factory function (tui, theme) => Component.
+ * Ctrl+O toggling is handled by the animation loop, which detects
+ * changes in getToolsExpanded() and toggles _widgetExpanded independently.
  */
-function buildWidgetFactory(state: WorkflowWidgetState, expanded: boolean): (_tui: unknown, theme: Theme) => Component & { handleInput?: (data: string) => void } {
+function buildWidgetFactory(state: WorkflowWidgetState, expanded: boolean): (_tui: unknown, theme: Theme) => Component {
 	return (_tui, theme) => {
-		// Current expanded for this factory instance
-		let currentExpanded = expanded;
+		const width = process.stdout.columns || 120;
+		const lines = buildWidgetLines(state, theme, expanded, width);
 
-		return {
-			render: (width: number) => {
-				const w = width || process.stdout.columns || 120;
-				const lines = buildWidgetLines(state, theme, currentExpanded, w);
-
-				// Build the visual output with box styling
-				// We return string[] directly here instead of using pi-tui Container
-				// to keep the render inline with the expanded state
-				const innerW = Math.max(1, w - 2);
-				const border = "─".repeat(innerW);
-				const result: string[] = [theme.bg("toolPendingBg", ` ${border} `)];
-				for (const line of lines) {
-					const t = truncateToWidth(` ${line}`, w, "");
-					result.push(theme.bg("toolPendingBg", t));
-				}
-				result.push(theme.bg("toolPendingBg", ` ${border} `));
-				return result;
-			},
-			invalidate: () => {},
-			handleInput: (data: string) => {
-				// Ctrl+O toggles sub-agent detail level
-				if (typeof data === "string" && data === "\x0f") {
-					currentExpanded = !currentExpanded;
-					_widgetExpanded = currentExpanded;
-					// Request re-render — next call to render() will use new expanded state
-					if (_lastWidgetCtx) {
-						// Update the widget with the new expanded state
-						_lastWidgetCtx.ui.setWidget(
-							WIDGET_KEY,
-							buildWidgetFactory(state, currentExpanded),
-						);
-						_lastWidgetCtx.ui.requestRender?.();
-					}
-					return; // Don't propagate to default handler
-				}
-				// Esc cancels the workflow
-				if (typeof data === "string" && data === "\x1b") {
-					_onCancelWorkflow?.();
-				}
-			},
-		};
+		const container = new Container();
+		const box = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
+		const inner = new Container();
+		for (const line of lines) {
+			inner.addChild(new Text(` ${line}`, 1, 0));
+		}
+		box.addChild(inner);
+		container.addChild(box);
+		return container;
 	};
 }
 
@@ -507,9 +473,9 @@ export function updateWorkflowWidget(
 
 	_widgetState = state;
 	_lastWidgetCtx = ctx;
-	_prevToolsExpanded = ctx.ui.getToolsExpanded?.() ?? false;
 
-	// Use the widget's own expanded state (or initialize to false)
+	// Initialize expanded state from tools panel state
+	_widgetExpanded = ctx.ui.getToolsExpanded?.() ?? false;
 	ctx.ui.setWidget(WIDGET_KEY, buildWidgetFactory(state, _widgetExpanded));
 
 	if (state.status === "running") {
@@ -527,15 +493,10 @@ function startWidgetAnimation(): void {
 			return;
 		}
 		try {
-			// Detect Ctrl+O from tools panel state change (fallback if handleInput not supported)
+			// Sync widget's expanded state from pi's tools panel state (Ctrl+O toggles this)
+			// No fighting — let pi handle the toggle normally
 			const toolsExpanded = _lastWidgetCtx.ui.getToolsExpanded?.() ?? false;
-			if (toolsExpanded !== _prevToolsExpanded) {
-				// User pressed Ctrl+O — capture the toggle for our widget
-				_widgetExpanded = toolsExpanded;
-				// Collapse tools panel immediately — update prev to prevent re-trigger
-				_lastWidgetCtx.ui.setToolsExpanded(false);
-				_prevToolsExpanded = false;
-			}
+			_widgetExpanded = toolsExpanded;
 
 			_lastWidgetCtx.ui.setWidget(
 				WIDGET_KEY,

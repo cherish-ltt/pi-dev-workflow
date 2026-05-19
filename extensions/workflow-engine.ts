@@ -504,20 +504,51 @@ async function runAgentWithProgress(
 		}
 	});
 
-	// Extract output files from subagent result
+	// ── Post-completion: parse subagent output for tool calls and file paths ──
+	// Progress messages from spawnSubagent rarely contain tool info,
+	// so we scan the full output after completion.
+	const allOutput = (result.output || "") + "\n" + (result.stderr || "");
 	const finalOutput = extractFinalOutput(result.output) || result.output;
-	// Try to find output file paths in the result
-	const outputPaths = finalOutput.matchAll(/(?:output|写入|保存)\s*(?:到|至|:)?\s*(\S+\.\w+)/gi);
-	for (const m of outputPaths) {
-		addWidgetSubStepOutput(stepIndex, agentName, m[1]!);
+	const searchText = allOutput + "\n" + finalOutput;
+
+	// Detect file creation/modification patterns from tool output
+	const filePatterns = [
+		/(?:write|edit|create|new|add|modify|update|delete|remove|read)\s+(?:tool|file|):?\s*["']?([^"'\n,]+\.[a-zA-Z0-9_]+)["']?/gi,
+		/(?:→|->|=>)\s*["']?([^"'\n,]+\.[a-zA-Z0-9_]+)["']?/gi,
+		/(?:编写|创建|修改|删除|读取|写入)\s*(?:了|文件)?\s*[:：]?\s*([^\s,，]+\.[a-zA-Z0-9_]+)/gi,
+		/(?:^|\n)\s*[-*]\s*(?:edit|add|new|create|modify|update)\s*:?\s*([^\n]+\.[a-zA-Z0-9_]+)/gim,
+	];
+	const seenTools = new Set<string>();
+	for (const pattern of filePatterns) {
+		let m;
+		while ((m = pattern.exec(searchText)) !== null) {
+			const filePath = m[1]!.trim().replace(/[`'"]+$/, "").split(/[\s,]/)[0]!;
+			if (filePath.length > 5 && filePath.length < 200 && !seenTools.has(filePath)) {
+				seenTools.add(filePath);
+				const fullMatch = m[0]!.toLowerCase();
+				const toolType = fullMatch.includes("write") || fullMatch.includes("创建") || fullMatch.includes("new") || fullMatch.includes("add") ? "new" :
+					fullMatch.includes("edit") || fullMatch.includes("修改") || fullMatch.includes("modify") || fullMatch.includes("update") ? "edit" :
+					fullMatch.includes("delete") || fullMatch.includes("删除") || fullMatch.includes("remove") ? "delete" :
+					fullMatch.includes("read") || fullMatch.includes("读取") ? "read" :
+					"edit";
+				addWidgetSubStepTool(stepIndex, agentName, `${toolType}: ${filePath}`);
+				_widgetExtraToolCount++;
+			}
+		}
 	}
 
-	// Check for artifact paths in result object
-	if (result.output) {
-		// Look for pi-dev-output paths
-		const devOutputs = result.output.matchAll(/pi-dev-output\/\S+/g);
-		for (const m of devOutputs) {
-			addWidgetSubStepOutput(stepIndex, agentName, m[0]!);
+	// Find output file paths (pi-dev-output, review reports, plan files)
+	const outputPathPatterns = [
+		/(?:output|保存|写入|write)\s*(?:到|至|:)?\s*("?[^"'\n]+\.\w+"?)/gi,
+		/pi-dev-output\/[^"'\s,]+/g,
+	];
+	for (const pattern of outputPathPatterns) {
+		let m;
+		while ((m = pattern.exec(searchText)) !== null) {
+			const path_ = m[0]!.trim().replace(/["']/g, "");
+			if (path_.length < 300) {
+				addWidgetSubStepOutput(stepIndex, agentName, path_);
+			}
 		}
 	}
 
