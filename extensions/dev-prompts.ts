@@ -596,6 +596,8 @@ async function runWizardWithGrill(
 			`是否进入自动化工作流？\n\n工作流将自动执行以下步骤：\n${formatWorkflowSteps(workflowConfig.steps)}\n\n选择「否」将直接发送 prompt 给主代理（传统模式）。`,
 		);
 		if (enterWorkflow) {
+			// Persist prompt before workflow (saveAnswerFile previously only ran in the non-workflow path below)
+			saveAnswerFile(ctx.cwd, finalPrompt);
 			await runWorkflow(ctx, pi, finalPrompt, workflowConfig);
 			return;
 		}
@@ -660,10 +662,15 @@ async function runWizard(
 			`是否进入自动化工作流？\n\n工作流将自动执行以下步骤：\n${formatWorkflowSteps(workflowConfig.steps)}\n\n选择「否」将直接发送 prompt 给主代理（传统模式）。`,
 		);
 		if (enterWorkflow) {
+			// Persist prompt before workflow (saveAnswerFile was absent from both workflow and non-workflow paths)
+			saveAnswerFile(ctx.cwd, prompt);
 			await runWorkflow(ctx, pi, prompt, workflowConfig);
 			return;
 		}
 	}
+
+	// Persist prompt before sending
+	saveAnswerFile(ctx.cwd, prompt);
 
 	// Send the assembled prompt to the main agent
 	pi.sendUserMessage(prompt, { deliverAs: "followUp" });
@@ -801,6 +808,8 @@ export default function (pi: ExtensionAPI) {
 			);
 
 			if (enterWorkflow) {
+				// Persist prompt before workflow (saveAnswerFile previously only ran in the legacy path below)
+				saveAnswerFile(ctx.cwd, finalPrompt);
 				await runWorkflow(ctx, pi, finalPrompt, { steps: FEAT_WORKFLOW_STEPS });
 				return;
 			}
