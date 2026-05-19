@@ -107,18 +107,71 @@ function writeToolPromptSuffix(outputFilePath: string): string {
 		"Instead, use the `write` tool to save the questions to a file.",
 		`Write to this exact path: ${outputFilePath}`,
 		"",
-		"The file content must be a valid JSON object with a single key \"questions\":",
-		'```json',
+		"The file content must be a **valid** JSON object conforming to this JSON Schema (Draft-07):",
+		"",
+		"```json",
+		'{',
+		'  "$schema": "http://json-schema.org/draft-07/schema#",',
+		'  "type": "object",',
+		'  "required": ["questions"],',
+		'  "properties": {',
+		'    "questions": {',
+		'      "type": "array",',
+		'      "items": {',
+		'        "type": "object",',
+		'        "required": ["id", "question", "options"],',
+		'        "properties": {',
+		'          "id": { "type": "integer" },',
+		'          "question": { "type": "string" },',
+		'          "options": {',
+		'            "type": "array",',
+		'            "items": { "type": "string" },',
+		'            "minItems": 1',
+		'          }',
+		'        }',
+		'      }',
+		'    }',
+		'  }',
+		'}',
+		"```",
+		"",
+		"### \u26a0\ufe0f CRITICAL: String escaping rules",
+		"",
+		"Every string value (question text, option text) MUST be valid JSON-escaped:",
+		"- Double quotes inside text \u2192 \\\"",
+		"- Newlines \u2192 \\n",
+		"- Backslashes \u2192 \\\\",
+		"- Tabs \u2192 \\t",
+		"",
+		"### \u2705 Self-review before writing",
+		"",
+		"Before calling the `write` tool, mentally validate your JSON.",
+		"Check that all strings are properly escaped and the structure matches the schema above.",
+		"If you are unsure, write a quick test with `bash` (e.g. `node -e \"JSON.parse(...)\"`).",
+		"",
+		"Example output:",
+		"```json",
 		'{',
 		'  "questions": [',
 		'    {',
 		'      "id": 1,',
-		'      "question": "问题文本?",',
-		'      "options": ["选项A", "选项B", "选项C"]',
+		'      "question": "\\u9879\\u76ee\\u662f\\u5426\\u5b58\\u5728\\u6a21\\u5757\\u7ed3\\u6784\\uff1f",',
+		'      "options": [',
+		'        "\\u5df2\\u5b58\\u5728\\uff0c\\u4f8b\\u5982 src/controller/example.rs",',
+		'        "\\u4ece\\u96f6\\u521b\\u5efa"',
+		'      ]',
+		'    },',
+		'    {',
+		'      "id": 2,',
+		'      "question": "\\u4ed6\\u8bf4\\u201c\\u8fd9\\u4e2a\\u4e0d\\u884c\\u201d\\uff0c\\u8be5\\u5982\\u4f55\\u5904\\u7406\\uff1f",',
+		'      "options": [',
+		'        "\\u5ffd\\u7565",',
+		'        "\\u4fee\\u590d"',
+		'      ]',
 		'    }',
 		'  ]',
 		'}',
-		'```',
+		"```",
 		"",
 		"After writing, you may include a brief summary in your chat response.",
 		"But the JSON MUST be in the file, NOT in the chat.",
@@ -152,7 +205,13 @@ function readQuestionsFromFile(filePath: string): GrillQuestion[] {
 				question: q.question,
 				options: q.options,
 			}));
-	} catch {
+	} catch (e) {
+		// Log parse errors for debugging (development feedback)
+		try {
+			const content = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8").slice(0, 1000) : "(file not found)";
+			console.error(`[grill-me-agent] JSON parse error in ${filePath}:`, (e as Error).message);
+			console.error(`[grill-me-agent] First 1000 chars:`, content);
+		} catch { /* ignore secondary errors */ }
 		return [];
 	}
 }
@@ -326,11 +385,20 @@ export async function runGrillPhase(
 		return loader;
 	});
 
-	// ── Step 4: Clean up temp file ───────────────────────────
-	try { fs.unlinkSync(outputFilePath); } catch { /* ignore */ }
-
-	// ── Step 4b: Retry dialog if no questions generated ──────
+	// ── Step 4: Retry dialog if no questions generated ──────
 	if (questions.length === 0) {
+		// Read the failed file to get error context for the retry prompt
+		let failedFileContent = "";
+		let parseErrorMsg = "";
+		try {
+			if (fs.existsSync(outputFilePath)) {
+				failedFileContent = fs.readFileSync(outputFilePath, "utf-8").slice(0, 2000);
+				JSON.parse(failedFileContent);
+			}
+		} catch (e) {
+			parseErrorMsg = (e as Error).message;
+		}
+
 		const choice = await ctx.ui.select(
 			"⚠️ AI 未能成功生成评审问题",
 			[
@@ -343,7 +411,28 @@ export async function runGrillPhase(
 		switch (choice) {
 			case "🔄 重新尝试生成评审问题": {
 				const retryPath = grillOutputPath(ctx.cwd);
-				const retryPrompt = [assembledPrompt, writeToolPromptSuffix(retryPath)].join("\n\n");
+				const errorFeedback = parseErrorMsg
+					? [
+						"",
+						"### ⚠️ Previous attempt had JSON errors — fix them now",
+						"",
+						`The previous attempt wrote to \`${outputFilePath}\` but the JSON was invalid.`,
+						"",
+						`JSON parse error: ${parseErrorMsg}`,
+						"",
+						"Invalid file content (first 2000 chars):",
+						"```",
+						failedFileContent.slice(0, 1000),
+						"```",
+						"",
+						"Please write valid JSON to the new path below. Make sure all strings are properly JSON-escaped.",
+					].join("\n")
+					: "";
+				const retryPrompt = [
+					assembledPrompt,
+					writeToolPromptSuffix(retryPath),
+					errorFeedback,
+				].filter(Boolean).join("\n\n");
 				questions = await ctx.ui.custom<GrillQuestion[]>((tui, theme, _kb, done) => {
 					const loader = new BorderedLoader(tui, theme, loaderLabel);
 					loader.onAbort = () => done([]);
@@ -356,7 +445,6 @@ export async function runGrillPhase(
 						.catch(() => done([]));
 					return loader;
 				});
-				try { fs.unlinkSync(retryPath); } catch { /* ignore */ }
 				if (questions.length === 0) {
 					ctx.ui.notify("⚠️ 再次尝试仍然失败，跳过 Grill 阶段", "warning");
 					return defaultResult;
