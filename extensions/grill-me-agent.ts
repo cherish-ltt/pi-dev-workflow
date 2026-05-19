@@ -693,7 +693,7 @@ async function askDevelopmentStart(
 				"",
 				"请按照上述 PRD 逐步实现。先分析代码库结构，给出实施计划，确认后再编写代码。",
 			].join("\n");
-			pi.sendUserMessage(devMsg);
+			pi.sendUserMessage(devMsg, { deliverAs: "followUp" });
 			ctx.ui.notify("🚀 已发送开发指令给主代理", "success");
 			break;
 		}
@@ -723,7 +723,7 @@ async function askDevelopmentStart(
 					"--- PRD 全文 ---",
 					prdContent,
 				].join("\n");
-			pi.sendUserMessage(finalMsg);
+			pi.sendUserMessage(finalMsg, { deliverAs: "followUp" });
 			ctx.ui.notify("🚀 已发送自定义开发指令给主代理", "success");
 			break;
 		}

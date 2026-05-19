@@ -421,7 +421,7 @@ async function runWizardWithGrill(
 	const answerPath = saveAnswerFile(ctx.cwd, finalPrompt);
 
 	ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
-	pi.sendUserMessage(finalPrompt);
+	pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
 	ctx.ui.notify(`📝 /dev-${type} 提示词已投递，主代理正在处理。备份: ${answerPath}`, "info");
 }
 
@@ -459,7 +459,7 @@ async function runWizard(
 	ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
 
 	// Send the assembled prompt to the main agent
-	pi.sendUserMessage(prompt);
+	pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 
 	// Also show the prompt in a notification for reference
 	ctx.ui.notify(`📝 /dev-${type} 提示词已投递，主代理正在处理`, "info");
@@ -590,7 +590,7 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("✅ 已从备份文件恢复提示词内容", "success");
 					const recoveredPath = saveAnswerFile(ctx.cwd, recovered);
 					ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
-					pi.sendUserMessage(recovered);
+					pi.sendUserMessage(recovered, { deliverAs: "followUp" });
 					ctx.ui.notify(`📝 /dev-feat 提示词已投递（恢复自备份），主代理正在处理。备份: ${recoveredPath}`, "info");
 					// ── Phase 5: Wait for agent to finish ───────────────
 					await ctx.waitForIdle();
@@ -605,7 +605,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const answerPath = saveAnswerFile(ctx.cwd, finalPrompt);
 			ctx.ui.notify(`✅ 提示词已组装完成，正在发送给主代理...`, "success");
-			pi.sendUserMessage(finalPrompt);
+			pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
 			ctx.ui.notify(`📝 /dev-feat 提示词已投递，主代理正在处理。备份: ${answerPath}`, "info");
 
 			// ── Phase 5: Wait for agent to finish ───────────────
