@@ -543,6 +543,11 @@ const SECURITY_WORKFLOW_STEPS: WorkflowStepDef[] = [
  * Run a wizard with an optional Grill phase:
  * Wizard → Assemble → (Grill?) → Send
  */
+/** Format workflow steps into a readable list. */
+function formatWorkflowSteps(steps: WorkflowStepDef[]): string {
+	return steps.map((s, i) => `${i + 1}. ${s.label}`).join("\n");
+}
+
 async function runWizardWithGrill(
 	ctx: ExtensionCommandContext,
 	pi: ExtensionAPI,
@@ -551,6 +556,7 @@ async function runWizardWithGrill(
 	questions: Array<{ label: string; placeholder: string; key: string }>,
 	assembler: (answers: Record<string, string>) => string,
 	grillOptions?: GrillOptions,
+	workflowConfig?: { steps: WorkflowStepDef[] },
 ): Promise<void> {
 	ctx.ui.notify(`📋 /dev-${type} — ${label}，请逐项填写以下信息（留空跳过对应段落，Esc 取消）`, "info");
 
@@ -630,6 +636,7 @@ async function runWizard(
 	label: string,
 	questions: Array<{ label: string; placeholder: string; key: string }>,
 	assembler: (answers: Record<string, string>) => string,
+	workflowConfig?: { steps: WorkflowStepDef[] },
 ): Promise<void> {
 	ctx.ui.notify(`📋 /dev-${type} — ${label}，请逐项填写以下信息（留空跳过对应段落，Esc 取消）`, "info");
 

@@ -370,7 +370,8 @@ export async function runGrillPhase(
 	// ── Step 1: Confirm entering grill mode ──────────────────
 	const enterGrill = await ctx.ui.confirm(confirmTitle, confirmDesc);
 	if (!enterGrill) {
-		return { ...defaultResult, cancelled: true };
+		// Skip grill but continue the workflow (not a cancellation)
+		return defaultResult;
 	}
 
 	// ── Step 2: Prepare output file + enhanced prompt ─────────
