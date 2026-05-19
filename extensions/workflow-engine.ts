@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { execSync } from "child_process";
 import { spawnSubagent, extractFinalOutput, discoverAgents, type AgentDef, type SubagentResult } from "./sub-agents";
 import {
 	uiSelect,
@@ -258,6 +259,69 @@ export function extractTaskSummary(prompt: string): string {
 	return cleaned.length > 60 ? cleaned.substring(0, 57) + "..." : cleaned || "工作流任务";
 }
 
+
+// ── Git diff-based file change detection ──────────────────────
+
+/**
+ * Run git diff to detect actual file changes since the last known state.
+ * Returns an array of { type, path } entries.
+ */
+function getGitDiffChanges(cwd: string): Array<{ type: "edit" | "new" | "delete"; path: string }> {
+	const changes: Array<{ type: "edit" | "new" | "delete"; path: string }> = [];
+	try {
+		// Use git status --porcelain to get all changes (modified, new, deleted, untracked)
+		const status = execSync("git status --porcelain", { cwd, encoding: "utf8", timeout: 5000 }).trim();
+		if (status) {
+			for (const line of status.split("\n")) {
+				const trimmed = line.trim();
+				// Format: "XY path" where X is index status, Y is working tree status
+				// "?? path" means untracked/new
+				// "M  path" or " M path" means modified
+				// "D  path" or " D path" means deleted
+				// "R  path" means renamed
+				const match = trimmed.match(/^(\?\?|[MADRCU]\s|[\s][MADRCU])\s+(.+)$/);
+				if (match) {
+					const statusStr = match[1].trim();
+					const path = match[2].trim();
+					const type = statusStr === "??" || statusStr === "A"
+						? "new" as const
+						: statusStr === "D"
+						  ? "delete" as const
+						  : "edit" as const;
+					if (path && !changes.some(c => c.path === path)) {
+						changes.push({ type, path });
+					}
+				}
+			}
+		}
+	} catch {
+		// Git not available or not a repo — silently skip
+	}
+	return changes;
+}
+
+/**
+ * Update widget tool list from git diff changes.
+ * Deduplicates against existing _workflowFileChanges.
+ */
+function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): void {
+	const changes = getGitDiffChanges(cwd);
+	const seen = new Set(_workflowFileChanges.map(c => c.filePath));
+	for (const change of changes) {
+		if (!seen.has(change.path)) {
+			seen.add(change.path);
+			_workflowFileChanges.push({
+				agent: agentName,
+				stepIndex,
+				type: change.type,
+				filePath: change.path,
+				timestamp: new Date().toISOString(),
+			});
+			addWidgetSubStepTool(stepIndex, agentName, `${change.type}: ${change.path}`);
+			_widgetExtraToolCount++;
+		}
+	}
+}
 // ═══════════════════════════════════════════════════════════════
 //  Checkpoint
 // ═══════════════════════════════════════════════════════════════
@@ -476,7 +540,9 @@ function updateWidgetStep(
 	},
 ): void {
 	if (index < _widgetSteps.length) {
+		const existing = _widgetSteps[index];
 		_widgetSteps[index] = {
+			...existing,
 			label,
 			status,
 			...extra,
@@ -697,15 +763,13 @@ async function runAgentWithProgress(
 				_widgetExtraToolCount++;
 			}
 		}
-		// Detect output file paths — ONLY match proper file paths, not random "output:" substrings
-		const outputMatch = progress.match(/output:\s*([^\s]{5,})/i);
+		// Detect output file paths — strict filtering, avoid AI text noise
+		const outputMatch = progress.match(/output:\s*((?:pi-dev-output\/)?[^\s,;)\]}]{5,}\.[a-z0-9]{1,5})/i);
 		if (outputMatch) {
 			const pathCandidate = outputMatch[1]!;
-			// Only treat as output if it looks like a file path
-			if (pathCandidate.includes(".") || pathCandidate.includes("/") || pathCandidate.includes("\\")) {
-				if (pathCandidate.length > 5 && pathCandidate.length < 300) {
-					addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
-				}
+			// Only accept real-looking file paths (not random AI substrings like "output::0.00004508")
+			if (pathCandidate.length > 5 && pathCandidate.length < 300 && !pathCandidate.includes("::")) {
+				addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
 			}
 		}
 	});
@@ -834,6 +898,9 @@ async function runAgentWithProgress(
 		}
 	}
 
+
+	// ── Update file changes from git diff (more accurate than text scraping) ──
+	updateToolsFromGit(_workflowCwd, stepIndex, agentName);
 	// Update sub-step status based on result
 	const subStatus: WorkflowSubStepWidgetState["status"] =
 		result.exitCode === 0 ? "done" :

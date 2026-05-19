@@ -307,17 +307,18 @@ function formatTimeout(ms: number): string {
 
 /**
  * Build the widget component lines for the given state.
- * Design: 严格要求的新ui — black background, proper tree-format, gold footer
+ * New UI design — black background, |__ tree connectors, gold footer.
  *
- * Required format:
+ * Running state example:
  * ⠋ 工作流 · 值守模式 · 6m16s
- *        ✓ 📋生成实施计划 (1m59s/超时时间15m) (✓正在doing的，绿色字体)
+ *        ✓ 📋生成实施计划 (1m59s/超时时间15m)
  *          |__ planner ·
  *             |__ output:pi-dev-output/pi-plans/20260520-1628-export-kcp-public2-api.md
- *     ▶ ⠋ 🔧实施代码 → 审查 · 第 1 次循环  (1s/超时时间15m) (▶正在doing的，橙色橘色字体)
+ *     ▶ ⠋ 🔧实施代码 → 审查 · 第 1 次循环  (1s/超时时间15m)
  *         |__ worker ·
- *         |   edit:代码xxx.rs
- *         |   edit:代码xxx.rs
+ *             |   edit:代码xxx.rs
+ *             |   edit:代码xxx.rs
+ *             |__ new:代码xxx.ts
  *         |__ reviewer ·
  *             |   output:pi-dev-output/pi-review/md/review-20260520-180001.md
  *             |__ output:pi-dev-output/pi-review/md/review-20260520-180002.md
@@ -329,7 +330,7 @@ function formatTimeout(ms: number): string {
  *       ◦ 📝 更新文档
  *         |__ docWriter ·
  *             |__ 正在排队
- *     Ctrl+O 展开详情(金色字体) | Escape/ctrl+c 取消(金色字体)
+ *     Ctrl+O 展开详情(金色) | Escape 取消(金色)
  */
 function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: boolean, width: number): string[] {
     const lines: string[] = [];
@@ -358,8 +359,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
         const isPending = s.status === "pending" && !isRunning;
         const isSkipped = s.status === "skipped";
 
-        // Icon
-        // ✓ for done (green), ▶ for current with spinner (orange), ◦ for pending
+        // ── Icon ──
+        // ✓ green for done, ▶ ⠋ orange for current, ◦ dim for pending
         let icon: string;
         if (isDone) {
             icon = theme.fg("success", "✓");
@@ -373,9 +374,9 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
             icon = dim(theme, "◦");
         }
 
-        // Duration
+        // ── Duration ──
         let displayDurMs: number | undefined = s.durationMs;
-        if (isRunning && s.startedAt && s.durationMs == null) {
+        if (isRunning && s.startedAt) {
             displayDurMs = Date.now() - s.startedAt;
         }
         const durStr =
@@ -387,15 +388,20 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
         const timeout = s.timeoutMs ? dim(theme, `/超时时间${formatTimeout(s.timeoutMs)}`) : "";
         const durClose = displayDurMs != null || isRunning ? dim(theme, ")") : "";
 
-        // Loop count (第 N 次循环) for loop-group steps
-        const loop =
-            s.loopCount != null && s.loopCount > 0
-                ? dim(theme, ` · 第 ${s.loopCount} 次循环`)
-                : s.loopCount == null && s.maxLoops != null && !isDone
-                  ? dim(theme, ` · 第 0 次循环`)
-                  : "";
+        // ── Loop count (第 N 次循环) for loop-group steps ──
+        let loopStr = "";
+        if (s.loopCount != null && s.loopCount > 0) {
+            loopStr = dim(theme, ` · 第 ${s.loopCount} 次循环`);
+        } else if (s.maxLoops != null) {
+            if (isRunning) {
+                // Immediately show 第 1 次循环 when loop-group starts
+                loopStr = dim(theme, ` · 第 1 次循环`);
+            } else if (isPending) {
+                loopStr = dim(theme, ` · 第 0 次循环`);
+            }
+        }
 
-        // Label color
+        // ── Label color ──
         const labelStyle = isRunning
             ? theme.fg("warning", s.label)
             : isDone
@@ -404,31 +410,28 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                 ? theme.fg("error", s.label)
                 : dim(theme, s.label);
 
-        // ── Step line ──
-        // Indentation matches required UI:
-        //   Current: 4 spaces before ▶ ⠋
-        //   Done:    7 spaces before ✓
-        //   Pending: 6 spaces before ◦
-        let stepIndent: number;
-        let stepLine: string;
-        if (isCurrent) {
-            stepIndent = 4;
-            stepLine = `${" ".repeat(4)}${icon} ${labelStyle}${loop}${durStr}${timeout}${durClose}`;
-        } else if (isDone) {
-            stepIndent = 7;
-            stepLine = `${" ".repeat(7)}${icon} ${labelStyle}${durStr}${timeout}${durClose}`;
+        // ── Step indentation ──
+        // Done:    "       ✓ ..."
+        // Running: "    ▶ ⠋ ..."
+        // Other:   "      ◦ ..."
+        let stepIndent: string;
+        if (isDone) {
+            stepIndent = "       ";
+        } else if (isRunning) {
+            stepIndent = "    ";
         } else {
-            stepIndent = 6;
-            stepLine = `${" ".repeat(6)}${icon} ${labelStyle}${loop}${durStr}${timeout}${durClose}`;
+            stepIndent = "      ";
         }
-        lines.push(stepLine);
 
-        // ── Sub-steps (agents with tree-format) ──
+        // ── Step line ──
+        lines.push(`${stepIndent}${icon} ${labelStyle}${loopStr}${durStr}${timeout}${durClose}`);
+
+        // ── Sub-steps (agents with |__ tree) ──
         if (s.subSteps && s.subSteps.length > 0) {
-            // Agent indent: 9 for done, 8 for current/pending
-            const agentIndentNum = isCurrent ? 8 : isDone ? 9 : 8;
+            // Agent indent: 9 for done, 8 for running/pending
+            const agentIndent = isDone ? "         " : "        ";
             // Child indent: always 12
-            const childIndentNum = 12;
+            const childIndent = "            ";
             const lastSubIdx = s.subSteps.length - 1;
 
             for (let si = 0; si < s.subSteps.length; si++) {
@@ -445,62 +448,50 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                       ? theme.fg("accent", spinnerFrame())
                       : dim(theme, "◦");
 
-                // Agent line connector: always ├─ (all agents have follow-up content
-                // Continuation prefix: depends on whether this is the last sub-step
-                const contPrefix = isLastSub ? "   " : "│  ";
+                // Agent line: "        |__ ✓ worker ·"
+                const agentConnector = dim(theme, "|__");
+                lines.push(`${agentIndent}${agentConnector} ${subIcon} ${sub.agent} ·`);
 
-                // Agent line: "        ├─ ✓ worker ·" (aligned)
-                const agentLine = `${" ".repeat(agentIndentNum)}${dim(theme, "├─")} ${subIcon} ${sub.agent} ·`;
-                lines.push(agentLine);
-
-                // ── Sub-agent children (tools, outputs, or "正在排队") ──
+                // ── Children (tools, outputs, or "正在排队") ──
                 const childItems: string[] = [];
 
                 if (isSubPending) {
                     childItems.push(dim(theme, "正在排队"));
                 } else if (isSubRunning || isSubDone) {
-                    // Tools (edit:xxx, new:xxx, etc.)
                     if (sub.tools && sub.tools.length > 0) {
                         for (const t of sub.tools) {
                             childItems.push(t);
                         }
                     }
-                    // Outputs (output:path/to/file)
                     if (sub.outputs && sub.outputs.length > 0) {
                         for (const o of sub.outputs) {
                             childItems.push(`output:${o}`);
                         }
                     }
-                    // If neither tools nor outputs, show detail if available
                     if (childItems.length === 0 && sub.detail) {
                         childItems.push(sub.detail);
                     }
                 }
 
-                // Render child items with tree branching
-                // When parent sub-step is NOT the last, all children use │  (continuation)
-                // When parent sub-step IS the last, last child uses └─, others use ├─
+                // Render children with tree branching
+                // Non-last child: |   (pipe + 3 spaces)
+                // Last child: |__ (pipe + 2 underscores + space) — closes the branch
                 const lastChildIdx = childItems.length - 1;
                 for (let ci = 0; ci < childItems.length; ci++) {
                     const isLastChild = ci === lastChildIdx;
-                    let childConnector: string;
-                    if (isLastSub && isLastChild) {
-                        // Last sub-step's last child closes the branch
-                        childConnector = dim(theme, "└─");
-                    } else {
-                        // All other cases continue the branch
-                        childConnector = dim(theme, "├─");
-                    }
-                    lines.push(`${" ".repeat(childIndentNum)}${childConnector} ${childItems[ci]!}`);
+                    const childConnector = isLastChild
+                        ? dim(theme, "|__")
+                        : dim(theme, "|  ");
+                    lines.push(`${childIndent}${childConnector} ${childItems[ci]!}`);
                 }
             }
         } else if (isPending) {
-            // Pending step with no subSteps yet — show generic queued indicator
-            const agentIndentNum = isCurrent ? 8 : isDone ? 9 : 8;
-            lines.push(`${" ".repeat(agentIndentNum)}${dim(theme, "├─")} ${dim(theme, "◦")} 正在排队`);
+            // Pending step with no sub-steps yet
+            const agentIndent = "        ";
+            lines.push(`${agentIndent}${dim(theme, "|__")} ${dim(theme, "◦")} 正在排队`);
         }
 
-        // Error detail (always shown for failed steps)
+        // Error detail for failed steps
         if (isFailed && s.error) {
             for (const errLine of s.error.split("\n")) {
                 lines.push(`       ${theme.fg("error", errLine)}`);
@@ -508,7 +499,7 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
         }
     }
 
-    // ── Stats line (if any) ──
+    // ── Stats line ──
     const stats: string[] = [];
     if (state.toolCount) stats.push(`${state.toolCount} tools`);
     if (state.tokenCount) stats.push(`${state.tokenCount} tokens`);
@@ -516,14 +507,10 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
         lines.push(` ${dim(theme, stats.join(" · "))}`);
     }
 
-    // ── Footer hints (金色字体 for important shortcuts) ──
+    // ── Footer hints (金色) ──
     if (state.status === "running") {
         const gold = (text: string) => theme.fg("warning", text);
-        if (!expanded) {
-            lines.push(` ${gold("Ctrl+O 展开详情")} ${dim(theme, "|")} ${gold("Escape 取消")}`);
-        } else {
-            lines.push(` ${dim(theme, "Ctrl+O 折叠详情")} ${dim(theme, "|")} ${gold("Escape 取消")}`);
-        }
+        lines.push(` ${gold("Ctrl+O 展开详情")} ${dim(theme, "|")} ${gold("Escape 取消")}`);
     }
 
     return lines;
@@ -833,13 +820,13 @@ function extractTaskSummary(prompt: string): string {
  *
  * 变动文件：
  * ├── extensions
- * │   ├── xxxx1.ts
- * │   ├── xxxx2.ts
+ * │   ├── xxxx1.ts
+ * │   ├── xxxx2.ts
  * ├── pi-dev-output
- * │   ├── pi-plans
- * │   │   └── 20260519-2155-workflow-ui-async-refactor.md
+ * │   ├── pi-plans
+ * │   │   └── 20260519-2155-workflow-ui-async-refactor.md
  * ├── tests
- * │   ├── test-workflow-engine.mjs
+ * │   ├── test-workflow-engine.mjs
  *
  * 完成 2/2 步子代理任务，修改 2 个文件，新增 8 个文件
  */
@@ -879,8 +866,6 @@ export function sendWorkflowResult(
     }
 
     const body = [
-        `[dev-workflow-result]`,
-        "",
         `[${taskSummary}]`,
         "",
         `${resultIcon} **工作流${statusText}** (${totalDur})`,
