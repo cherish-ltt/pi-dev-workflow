@@ -232,7 +232,27 @@ export function extractTaskSummary(prompt: string): string {
 	const firstLine = prompt.split("\n").find(l => l.trim()) ?? "";
 	const tagMatch = firstLine.match(/^\[([^\]]+)\]\s*(.+)/);
 	if (tagMatch) {
-		return `${tagMatch[1]} - ${tagMatch[2]!.trim()}`;
+		const tag = tagMatch[1]!.trim();
+		const rest = tagMatch[2]!.trim();
+		// If the rest looks like placeholder dots, try to find a better summary
+		if (rest.replace(/\.\.\./g, "").trim() === "" || rest === "...") {
+			const lines = prompt.split("\n").filter(l => l.trim());
+			if (lines.length > 1) {
+				const secondLine = lines[1]!.replace(/^[*\s#]+/, "").trim();
+				if (secondLine && !secondLine.startsWith("**")) {
+					return `${tag} - ${secondLine.substring(0, 60)}`;
+				}
+			}
+			for (const line of lines.slice(1, 5)) {
+				const cleaned = line.replace(/^[*\s#]+/, "").trim();
+				if (cleaned && cleaned.length > 5 && !cleaned.startsWith("**") && !cleaned.startsWith("`")) {
+					const summary = cleaned.length > 50 ? cleaned.substring(0, 47) + "..." : cleaned;
+					return `${tag} - ${summary}`;
+				}
+			}
+			return `${tag} - 工作流任务`;
+		}
+		return `${tag} - ${rest}`;
 	}
 	const cleaned = firstLine.replace(/^[*\s#]+/, "").trim();
 	return cleaned.length > 60 ? cleaned.substring(0, 57) + "..." : cleaned || "工作流任务";
@@ -666,18 +686,27 @@ async function runAgentWithProgress(
 	// Parse progress messages for tool calls and outputs
 	const result = await spawnSubagent(agent, task, _workflowCwd, signal, timeoutMs, (progress) => {
 		// Try to parse tool calls from progress messages
-		const toolMatch = progress.match(/(edit|read|write|new|bash|grep|find|ls)\s*[:：]\s*(\S+)/i);
+		// Only match if it looks like a file path (contains a dot or path separator)
+		const toolMatch = progress.match(/(edit|read|write|new|bash|grep|find|ls|delete|remove)\s*[:：]\s*(\S+)/i);
 		if (toolMatch) {
 			const toolType = toolMatch[1]!.toLowerCase();
 			const target = toolMatch[2]!;
-			// Classify as tool usage
-			addWidgetSubStepTool(stepIndex, agentName, `${toolType}: ${target}`);
-			_widgetExtraToolCount++;
+			// Only classify as file operation if it's a file path-like string
+			if (target.includes(".") || target.includes("/") || target.includes("\\")) {
+				addWidgetSubStepTool(stepIndex, agentName, `${toolType}: ${target}`);
+				_widgetExtraToolCount++;
+			}
 		}
-		// Detect output file paths
-		const outputMatch = progress.match(/output:\s*(\S+)/i);
+		// Detect output file paths — ONLY match proper file paths, not random "output:" substrings
+		const outputMatch = progress.match(/output:\s*([^\s]{5,})/i);
 		if (outputMatch) {
-			addWidgetSubStepOutput(stepIndex, agentName, outputMatch[1]!);
+			const pathCandidate = outputMatch[1]!;
+			// Only treat as output if it looks like a file path
+			if (pathCandidate.includes(".") || pathCandidate.includes("/") || pathCandidate.includes("\\")) {
+				if (pathCandidate.length > 5 && pathCandidate.length < 300) {
+					addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
+				}
+			}
 		}
 	});
 
@@ -700,42 +729,106 @@ async function runAgentWithProgress(
 	const finalOutput = extractFinalOutput(result.output) || result.output;
 	const searchText = allOutput + "\n" + finalOutput;
 
-	// Detect file creation/modification patterns from tool output
+	// Detect file creation/modification patterns from agent's final output text
+	// The agent's response typically lists files using markdown backticks or bullet points
 	const filePatterns = [
-		/(?:write|edit|create|new|add|modify|update|delete|remove|read)\s+(?:tool|file|):?\s*["']?([^"'\n,]+\.[a-zA-Z0-9_]+)["']?/gi,
-		/(?:→|->|=>)\s*["']?([^"'\n,]+\.[a-zA-Z0-9_]+)["']?/gi,
-		/(?:编写|创建|修改|删除|读取|写入)\s*(?:了|文件)?\s*[:：]?\s*([^\s,，]+\.[a-zA-Z0-9_]+)/gi,
-		/(?:^|\n)\s*[-*]\s*(?:edit|add|new|create|modify|update)\s*:?\s*([^\n]+\.[a-zA-Z0-9_]+)/gim,
+		// Markdown code blocks with file paths: `src/main.rs`, `path/to/file.ts`
+		/`([^`]+\.[a-zA-Z0-9_]+)`/g,
+		// Bullet points with file operation verbs: - Modify `src/main.rs`, * Created `file.ts`
+		/(?:^|\n)\s*[-*]\s*(?:modified|created|updated|edited|added|deleted|removed|changed|wrote|writes?)\s*[`"']?([^`"'\n,]+\.[a-zA-Z0-9_]+)[`"']?/gim,
+		// Descriptive: "I've modified src/main.rs", "reading config.json"
+		/(?:modified|created|updated|edited|added|deleted|removed|changed|wrote|write|writes|read|reads?)\s+(?:the\s+)?[`"']?([^`"'\n,]+\.[a-zA-Z0-9_]+)[`"']?/gi,
+		// Chinese patterns
+		/(?:编写|创建|修改|删除|读取|写入|更新)\s*(?:了|文件)?\s*[:：]?\s*[`"']?([^`"'\s,，]+\.[a-zA-Z0-9_]+)[`"']?/gi,
+		// File path with action prefix: "edit: src/file.ts", "new: src/file.ts"
+		/(?:^|\n)\s*(?:edit|new|delete|read|modify|create|update|add|remove)\s*[:：]\s*([^\n]+\.[a-zA-Z0-9_]+)/gim,
 	];
 	const seenTools = new Set<string>();
 	for (const pattern of filePatterns) {
 		let m;
 		while ((m = pattern.exec(searchText)) !== null) {
-			const filePath = m[1]!.trim().replace(/[`'"]+$/, "").split(/[\s,]/)[0]!;
-			if (filePath.length > 5 && filePath.length < 200 && !seenTools.has(filePath)) {
+			const filePath = m[1]!.trim()
+				.replace(/[`'"\)\(\]]+$/, "")
+				.replace(/^[`'"\)\(\[]+/, "")
+				.split(/[\s,;]/)[0]!;
+			// Validate it's a real file path
+			if (filePath.length > 3 && filePath.length < 300 && !seenTools.has(filePath)) {
+				// Skip common non-file matches
+				if (filePath.match(/^(the|a|an|this|that|it|its|my|your|our|their|some|any|all|each|every|both|few|many|several|most|other|another|such|what|which|whose|whom|when|where|why|how|who|being|having|doing|making|taking|giving|getting|setting|using|running|going|coming|looking|finding|keeping|putting)/i)) continue;
+				if (filePath.startsWith("http")) continue;
+				if (filePath.length < 6 && !filePath.includes("/")) continue;
+
 				seenTools.add(filePath);
 				const fullMatch = m[0]!.toLowerCase();
-				const toolType = fullMatch.includes("write") || fullMatch.includes("创建") || fullMatch.includes("new") || fullMatch.includes("add") ? "new" :
-					fullMatch.includes("edit") || fullMatch.includes("修改") || fullMatch.includes("modify") || fullMatch.includes("update") ? "edit" :
-					fullMatch.includes("delete") || fullMatch.includes("删除") || fullMatch.includes("remove") ? "delete" :
-					fullMatch.includes("read") || fullMatch.includes("读取") ? "read" :
-					"edit";
+				// Determine operation type
+				let toolType = "edit";
+				if (fullMatch.includes("write") || fullMatch.includes("创建") || fullMatch.includes("new") || fullMatch.includes("add") || fullMatch.includes("created") || fullMatch.includes("added")) {
+					toolType = "new";
+				} else if (fullMatch.includes("delete") || fullMatch.includes("删除") || fullMatch.includes("remove") || fullMatch.includes("deleted") || fullMatch.includes("removed")) {
+					toolType = "delete";
+				} else if (fullMatch.includes("read") || fullMatch.includes("读取")) {
+					toolType = "read";
+				}
 				addWidgetSubStepTool(stepIndex, agentName, `${toolType}: ${filePath}`);
 				_widgetExtraToolCount++;
 			}
 		}
 	}
 
+	// If we found no file tools from text patterns, try alternative approaches
+	// Look for explicit tool call patterns in the raw JSON output
+	if (seenTools.size === 0) {
+		const jsonLines = (result.output || "").split("\n");
+		for (const line of jsonLines) {
+			try {
+				const event = JSON.parse(line);
+				// Look for tool_use events in the JSON stream
+				if (event.type === "message_update" && event.assistantMessageEvent?.type === "tool_use") {
+					const toolName = event.assistantMessageEvent.name;
+					const args = event.assistantMessageEvent.args || {};
+					// write tool: args contains file_path
+					if (toolName === "write" && args.file_path) {
+						const fp = args.file_path.trim();
+						if (!seenTools.has(fp)) {
+							seenTools.add(fp);
+							addWidgetSubStepTool(stepIndex, agentName, `new: ${fp}`);
+							_widgetExtraToolCount++;
+						}
+					}
+					// edit tool: args contains file_path
+					if (toolName === "edit" && args.file_path) {
+						const fp = args.file_path.trim();
+						if (!seenTools.has(fp)) {
+							seenTools.add(fp);
+							addWidgetSubStepTool(stepIndex, agentName, `edit: ${fp}`);
+							_widgetExtraToolCount++;
+						}
+					}
+				}
+			} catch { /* not JSON, skip */ }
+		}
+	}
+
 	// Find output file paths (pi-dev-output, review reports, plan files)
 	const outputPathPatterns = [
-		/(?:output|保存|写入|write)\s*(?:到|至|:)?\s*("?[^"'\n]+\.\w+"?)/gi,
-		/pi-dev-output\/[^"'\s,]+/g,
+		// Save to path: "save to pi-dev-output/pi-plans/xxx.md"
+		/(?:output|保存|save|写入|write)\s*(?:到|至|to|:)?\s*["']?([^"'\n]+\.[a-zA-Z0-9_]+)["']?/gi,
+		// Direct reference to pi-dev-output paths
+		/pi-dev-output\/[^"'\s,)+]+/g,
+		// Review file patterns
+		/review-\d{8}-\d{6}\.md/g,
 	];
+	const seenOutputs = new Set<string>();
 	for (const pattern of outputPathPatterns) {
 		let m;
 		while ((m = pattern.exec(searchText)) !== null) {
-			const path_ = m[0]!.trim().replace(/["']/g, "");
-			if (path_.length < 300) {
+			let path_ = m[0]!.trim().replace(/["']/g, "");
+			// If first group captured, use it (the cleaned path)
+			if (m[1] && m[1].length > 3) {
+				path_ = m[1]!.trim().replace(/["']/g, "");
+			}
+			if (path_.length > 5 && path_.length < 300 && !seenOutputs.has(path_)) {
+				seenOutputs.add(path_);
 				addWidgetSubStepOutput(stepIndex, agentName, path_);
 			}
 		}
