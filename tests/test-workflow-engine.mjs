@@ -228,11 +228,84 @@ const result2 = simulateParseReviewerOutput(extracted2);
 assertEq(result2?.maxSeverity, "medium", "FIX: 提取后 medium 等级应正确解析");
 assertEq(result2?.medium, 3, "FIX: medium 计数应正确");
 
-// Test 9: parseReviewerOutputFromFile — 读取审查文件
-console.log("\n📋 parseReviewerOutputFromFile 测试\n");
+// Test 9: extractSeverityFromText — 从 ### C1. / ### M1. / ### L1. 格式解析
+console.log("\n📋 extractSeverityFromText 测试\n");
 
-// 模拟文件读取函数（匹配 workflow-engine.ts 中新增的 parseReviewerOutputFromFile）
-function simulateParseReviewerOutputFromFile(cwd) {
+function simulateExtractSeverityFromText(text) {
+	const headerCritical = [...text.matchAll(/^###\s+C\d+\./gm)].length;
+	const headerMedium   = [...text.matchAll(/^###\s+M\d+\./gm)].length;
+	const headerLow      = [...text.matchAll(/^###\s+L\d+\./gm)].length;
+	if (headerCritical + headerMedium + headerLow > 0) {
+		return {
+			maxSeverity: headerCritical > 0 ? "critical" : headerMedium > 0 ? "medium" : "low",
+			critical: headerCritical,
+			medium: headerMedium,
+			low: headerLow,
+		};
+	}
+	const tableCritical = [...text.matchAll(/^\|\s*\w+\s*\|\s*critical/gim)].length;
+	const tableMedium   = [...text.matchAll(/^\|\s*\w+\s*\|\s*medium/gim)].length;
+	const tableLow      = [...text.matchAll(/^\|\s*\w+\s*\|\s*low/gim)].length;
+	if (tableCritical + tableMedium + tableLow > 0) {
+		return {
+			maxSeverity: tableCritical > 0 ? "critical" : tableMedium > 0 ? "medium" : "low",
+			critical: tableCritical,
+			medium: tableMedium,
+			low: tableLow,
+		};
+	}
+	const labelCritical = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*critical/gi)].length;
+	const labelMedium   = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*medium/gi)].length;
+	const labelLow      = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*low/gi)].length;
+	if (labelCritical + labelMedium + labelLow > 0) {
+		return {
+			maxSeverity: labelCritical > 0 ? "critical" : labelMedium > 0 ? "medium" : "low",
+			critical: labelCritical,
+			medium: labelMedium,
+			low: labelLow,
+		};
+	}
+	return null;
+}
+
+// 模拟 review-20260519-230500.md 的格式
+const reviewText1 = `# 代码审查\n\n### C1. [Bug] 第一个严重问题\n内容...\n### C2. [Bug] 第二个严重问题\n### M1. [优化] 中等问题\n### L1. [风格] 低优先级`;
+const sev1 = simulateExtractSeverityFromText(reviewText1);
+assertEq(sev1?.maxSeverity, "critical", "### C1. 格式应解析为 critical");
+assertEq(sev1?.critical, 2, "### C1./C2. 应计数 2 critical");
+assertEq(sev1?.medium, 1, "### M1. 应计数 1 medium");
+assertEq(sev1?.low, 1, "### L1. 应计数 1 low");
+
+// 模拟 review-20260519-231500.md 的混合格式（header 优先）
+const reviewText2 = `# 复核审查\n\n### C1. [编译错误] 文件被截断\n### C2. [编译错误] buildCp 未定义\n### C3. 重复代码\n\n| 编号 | 等级 | 状态 | 说明 |\n| C2 | critical | ✅ | 确认 |\n| M1 | medium | ✅ | 确认 |`;
+const sev2 = simulateExtractSeverityFromText(reviewText2);
+assertEq(sev2?.maxSeverity, "critical", "混合格式 header 优先应解析为 critical");
+assertEq(sev2?.critical, 3, "Header 优先: 3 critical (C1/C2/C3), 不重复计数表格行");
+
+// 纯表格格式（无 header）
+const reviewText3 = `| 编号 | 等级 | 说明 |\n| --- | --- | --- |\n| C1 | critical | Bug |\n| M1 | medium | 优化 |\n| M2 | medium | 重构 |`;
+const sev3 = simulateExtractSeverityFromText(reviewText3);
+assertEq(sev3?.maxSeverity, "critical", "纯表格格式应解析为 critical");
+assertEq(sev3?.critical, 1, "纯表格: 1 critical");
+assertEq(sev3?.medium, 2, "纯表格: 2 medium");
+
+// **Severity**: critical 标签格式
+const reviewText4 = `## 问题\n**Severity**: critical\n内容...\n**严重程度**: medium\n其他内容`;
+const sev4 = simulateExtractSeverityFromText(reviewText4);
+assertEq(sev4?.maxSeverity, "critical", "**Severity**: 标签格式应解析为 critical");
+assertEq(sev4?.critical, 1, "标签格式 critical 计数");
+
+// 无匹配
+const reviewText5 = `# 正常文档\n没有任何严重标记`;
+assertEq(simulateExtractSeverityFromText(reviewText5), null, "无匹配应返回 null");
+
+// 空文本
+assertEq(simulateExtractSeverityFromText(""), null, "空文本应返回 null");
+
+// Test 10: readLatestReviewMd — 从实际审查文件读取
+console.log("\n📋 readLatestReviewMd + extractSeverityFromText 集成测试\n");
+
+function simulateReadLatestReviewMd(cwd) {
 	const reviewDir = path.join(cwd, "pi-dev-output", "pi-review", "md");
 	try {
 		if (!fs.existsSync(reviewDir)) return null;
@@ -241,25 +314,23 @@ function simulateParseReviewerOutputFromFile(cwd) {
 			.map(f => ({ name: f, mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs }))
 			.sort((a, b) => b.mtime - a.mtime);
 		if (files.length === 0) return null;
-		const content = fs.readFileSync(path.join(reviewDir, files[0].name), "utf-8");
-		return simulateParseReviewerOutput(content);
-	} catch {
-		return null;
-	}
+		return fs.readFileSync(path.join(reviewDir, files[0].name), "utf-8");
+	} catch { return null; }
 }
 
-const reviewResult = simulateParseReviewerOutputFromFile(__dirname + "/..");
-if (reviewResult) {
-	assertEq(typeof reviewResult.maxSeverity, "string", "parseReviewerOutputFromFile 应从最新审查文件解析出 maxSeverity");
-	assertEq(typeof reviewResult.critical, "number", "parseReviewerOutputFromFile 应解析出 critical 计数");
+const reviewContent = simulateReadLatestReviewMd(__dirname + "/..");
+if (reviewContent) {
+	const result = simulateExtractSeverityFromText(reviewContent);
+	// 最新的审查文件（230500 或 231500）都有 critical 问题
+	assertEq(typeof result?.maxSeverity, "string", "从实际审查文件应解析出 severity");
+	// 至少有一个 critical（两份新文件都有）
+	assert(result?.critical > 0, "审查文件中应检测到 critical 问题");
 } else {
-	// 没有审查文件时也应优雅处理
-	assert(true, "parseReviewerOutputFromFile 在无审查文件时返回 null（非错误）");
+	assert(true, "无审查文件时跳过（非错误）");
 }
 
-// Test 10: parseReviewerOutputFromFile — 不存在的目录
-const nullResult = simulateParseReviewerOutputFromFile("/nonexistent/path");
-assertEq(nullResult, null, "不存在的目录应返回 null");
+// 不存在的目录
+assertEq(simulateReadLatestReviewMd("/nonexistent/path"), null, "不存在的目录应返回 null");
 
 // Test 11: 验证 extractFinalOutput 对已损坏/不完整输出的鲁棒性
 const partialOutput = '{"type":"message_start"}\n{"invalid json\n';

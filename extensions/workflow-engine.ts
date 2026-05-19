@@ -163,12 +163,56 @@ export function parseReviewerOutput(
 }
 
 /**
- * 从 reviewer 生成的审查 MD 文件中读取 [REVIEW_SUMMARY] 块。
- * 兜底方案：当 reviewer agent 的输出中找不到摘要时，直接读取审查文件。
+ * 从文本中提取严重等级——扫描常见的 review 文本结构。
+ * 不依赖 agent 输出 [REVIEW_SUMMARY] 块，通过分析文本格式推断等级。
  */
-export function parseReviewerOutputFromFile(
-	cwd: string,
+export function extractSeverityFromText(
+	text: string,
 ): { maxSeverity: string; critical: number; medium: number; low: number } | null {
+	// 模式1: ### C1. / ### M1. / ### L1. ——最可靠，两份新审查文件均使用此格式
+	const headerCritical = [...text.matchAll(/^###\s+C\d+\./gm)].length;
+	const headerMedium   = [...text.matchAll(/^###\s+M\d+\./gm)].length;
+	const headerLow      = [...text.matchAll(/^###\s+L\d+\./gm)].length;
+	if (headerCritical + headerMedium + headerLow > 0) {
+		return {
+			maxSeverity: headerCritical > 0 ? "critical" : headerMedium > 0 ? "medium" : "low",
+			critical: headerCritical,
+			medium: headerMedium,
+			low: headerLow,
+		};
+	}
+
+	// 模式2: | C2 | critical | ... |  (表格行，multiline 匹配)
+	const tableCritical = [...text.matchAll(/^\|\s*\w+\s*\|\s*critical/gim)].length;
+	const tableMedium   = [...text.matchAll(/^\|\s*\w+\s*\|\s*medium/gim)].length;
+	const tableLow      = [...text.matchAll(/^\|\s*\w+\s*\|\s*low/gim)].length;
+	if (tableCritical + tableMedium + tableLow > 0) {
+		return {
+			maxSeverity: tableCritical > 0 ? "critical" : tableMedium > 0 ? "medium" : "low",
+			critical: tableCritical,
+			medium: tableMedium,
+			low: tableLow,
+		};
+	}
+
+	// 模式3: **Severity**: critical / **严重程度**: critical
+	const labelCritical = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*critical/gi)].length;
+	const labelMedium   = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*medium/gi)].length;
+	const labelLow      = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*low/gi)].length;
+	if (labelCritical + labelMedium + labelLow > 0) {
+		return {
+			maxSeverity: labelCritical > 0 ? "critical" : labelMedium > 0 ? "medium" : "low",
+			critical: labelCritical,
+			medium: labelMedium,
+			low: labelLow,
+		};
+	}
+
+	return null;
+}
+
+/** 读取最新的审查 MD 文件内容，不存在时返回 null */
+export function readLatestReviewMd(cwd: string): string | null {
 	const reviewDir = path.join(cwd, DEV_OUTPUT_DIR, "pi-review", "md");
 	try {
 		if (!fs.existsSync(reviewDir)) return null;
@@ -177,8 +221,7 @@ export function parseReviewerOutputFromFile(
 			.map(f => ({ name: f, mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs }))
 			.sort((a, b) => b.mtime - a.mtime);
 		if (files.length === 0) return null;
-		const content = fs.readFileSync(path.join(reviewDir, files[0].name), "utf-8");
-		return parseReviewerOutput(content);
+		return fs.readFileSync(path.join(reviewDir, files[0].name), "utf-8");
 	} catch {
 		return null;
 	}
@@ -540,9 +583,18 @@ async function executeLoopGroup(
 		const combinedOutput = extractedOutput + "\n" + reviewResult.stderr;
 		let reviewSummary = parseReviewerOutput(combinedOutput);
 
-		// fallback: 若输出中找不到 REVIEW_SUMMARY，直接读取审查文件
+		// fallback 1: 从 reviewer 回复文本中分析严重等级（### C1. / 表格行 / 标签）
 		if (!reviewSummary) {
-			reviewSummary = parseReviewerOutputFromFile(ctx.cwd);
+			reviewSummary = extractSeverityFromText(extractedOutput);
+		}
+
+		// fallback 2: 读取最新审查文件并分析
+		if (!reviewSummary) {
+			const reviewContent = readLatestReviewMd(ctx.cwd);
+			if (reviewContent) {
+				reviewSummary = parseReviewerOutput(reviewContent)
+					?? extractSeverityFromText(reviewContent);
+			}
 		}
 
 		const sev = reviewSummary?.maxSeverity ?? "low";
