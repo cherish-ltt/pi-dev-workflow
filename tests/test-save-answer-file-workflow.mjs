@@ -1,11 +1,13 @@
 /**
  * test-save-answer-file-workflow.mjs — 验证 saveAnswerFile 在 Workflow 路径中未被跳过
  *
- * Bug: 当用户进入自动化工作流时，handler 在调用 runWorkflow 后立即 return，
- * 导致 workflow 路径后的 saveAnswerFile 调用被绕过，prompt 不会持久化到
- * pi-dev-output/pi-grill/answer-xxx.md。
+ * 重构后所有 workflow 入口统一经过 promptWorkflowDecision() 函数，
+ * 该函数在调用 runWorkflow 前一定会调用 saveAnswerFile。
  *
- * 本测试通过静态分析源码，验证所有进入 workflow 的分支在此之前都已调用 saveAnswerFile。
+ * 本测试验证：
+ *   1. promptWorkflowDecision 函数体：两个路径（默认/自定义）都在 runWorkflow 前调用了 saveAnswerFile
+ *   2. 所有 caller（runWizardWithGrill / runWizard / dev-feat handler）都调用 promptWorkflowDecision
+ *   3. 所有非 workflow 路径的 saveAnswerFile 未被移除
  *
  * Run: node tests/test-save-answer-file-workflow.mjs
  */
@@ -42,16 +44,6 @@ function assertEq(actual, expected, msg) {
 	}
 }
 
-function assertNe(actual, unexpected, msg) {
-	if (actual !== unexpected) {
-		pass++;
-		console.log(`  ✅ ${msg}`);
-	} else {
-		fail++;
-		console.error(`  ❌ ${msg} — 不应等于 ${JSON.stringify(unexpected)}`);
-	}
-}
-
 // ═══════════════════════════════════════════════════════════════
 //  Read source
 // ═══════════════════════════════════════════════════════════════
@@ -68,52 +60,74 @@ console.log(`📄 源文件: ${SOURCE_PATH}`);
 console.log(`📏 文件大小: ${source.length} 字节\n`);
 
 // ═══════════════════════════════════════════════════════════════
-//  Test 1: All "enterWorkflow" branches must call saveAnswerFile BEFORE runWorkflow
+//  Test 1: promptWorkflowDecision 在 runWorkflow 前调用 saveAnswerFile
 // ═══════════════════════════════════════════════════════════════
 
-console.log("📋 Test 1: 所有 workflow 入口分支在 runWorkflow 前调用 saveAnswerFile\n");
+console.log("📋 Test 1: promptWorkflowDecision 的两个路径都在 runWorkflow 前调用 saveAnswerFile\n");
 
-// Pattern: look for each `if (enterWorkflow) {` block and verify
-// it contains saveAnswerFile BEFORE the runWorkflow call.
-const workflowBranches = source.match(/if \(enterWorkflow\) \{[\s\S]*?await runWorkflow\([^;]+\);/g);
-assert(workflowBranches !== null && workflowBranches.length > 0, "应找到至少一个 workflow 分支");
+// Find the promptWorkflowDecision function body
+const pwdMatch = source.match(/async function promptWorkflowDecision\([\s\S]*?^\}/m);
+assert(pwdMatch !== null, "应找到 promptWorkflowDecision 函数");
 
-console.log(`   发现 ${workflowBranches.length} 个 workflow 分支`);
+const pwdFunc = pwdMatch[0];
+assert(
+	pwdFunc.includes("saveAnswerFile(ctx.cwd, finalPrompt)"),
+	"promptWorkflowDecision 应包含 saveAnswerFile(finalPrompt) 调用",
+);
 
-for (let i = 0; i < workflowBranches.length; i++) {
-	const branch = workflowBranches[i];
-	const hasSaveBeforeRun = branch.indexOf("saveAnswerFile") < branch.indexOf("await runWorkflow");
-	assert(hasSaveBeforeRun, `workflow 分支 #${i + 1} 应在 runWorkflow 前调用 saveAnswerFile`);
+// Verify the default path (choice "1"): saveAnswerFile before runWorkflow
+const defaultPath = pwdFunc.match(/if \(choice\.startsWith\("1"\)\) \{[\s\S]*?return true;\s*\}/);
+assert(defaultPath !== null, "默认模式路径应存在");
+if (defaultPath) {
+	const saveIdx = defaultPath[0].indexOf("saveAnswerFile");
+	const runIdx = defaultPath[0].indexOf("runWorkflow");
+	assert(saveIdx >= 0 && saveIdx < runIdx, "默认路径应在 runWorkflow 前调用 saveAnswerFile");
+}
+
+// Verify the custom path: saveAnswerFile before runWorkflow
+const customPath = pwdFunc.match(/if \(customSteps\.length === 0\) \{[\s\S]*?return true;\s*\}/);
+assert(customPath !== null, "自定义模式路径应存在");
+if (customPath) {
+	const saveIdx = customPath[0].indexOf("saveAnswerFile");
+	const runIdx = customPath[0].indexOf("runWorkflow");
+	assert(saveIdx >= 0 && runIdx >= 0, "自定义路径应包含 saveAnswerFile 和 runWorkflow");
+	assert(saveIdx < runIdx, "自定义路径应在 runWorkflow 前调用 saveAnswerFile");
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Test 2: runWizard 的非 workflow 路径也必须调用 saveAnswerFile
+//  Test 2: 所有 caller 正确调用 promptWorkflowDecision
 // ═══════════════════════════════════════════════════════════════
 
-console.log("\n📋 Test 2: runWizard 非 workflow 路径调用 saveAnswerFile\n");
+console.log("\n📋 Test 2: 所有 caller 正确调用 promptWorkflowDecision\n");
 
-// Find the runWizard function and check the non-workflow path
-// It should have saveAnswerFile before pi.sendUserMessage
+// Count occurrences of promptWorkflowDecision calls in handlers (not definition)
+// We need at least: runWizardWithGrill + runWizard + dev-feat = 3 call sites
+const workflowDecisionCalls = source.match(/await promptWorkflowDecision\(/g);
+assert(workflowDecisionCalls !== null && workflowDecisionCalls.length >= 3,
+	`应找到至少 3 个 promptWorkflowDecision 调用，实际 ${workflowDecisionCalls?.length ?? 0}`);
+console.log(`   共 ${workflowDecisionCalls.length} 个 promptWorkflowDecision 调用`);
+
+// ═══════════════════════════════════════════════════════════════
+//  Test 3: runWizard 的非 workflow 路径调用 saveAnswerFile
+// ═══════════════════════════════════════════════════════════════
+
+console.log("\n📋 Test 3: runWizard 非 workflow 路径调用 saveAnswerFile\n");
+
 const runWizardMatch = source.match(/async function runWizard\([\s\S]*?\n\}/);
 assert(runWizardMatch !== null, "应找到 runWizard 函数");
 
 const runWizardFunc = runWizardMatch[0];
-
-// In runWizard, after the workflow block, there should be a saveAnswerFile call
-const afterWorkflowInRunWizard = runWizardFunc.split("if (enterWorkflow)")[1];
-// There should be a saveAnswerFile call after the closing brace of the workflow if block
 assert(
 	runWizardFunc.includes("saveAnswerFile(ctx.cwd, prompt);"),
-	"runWizard 非 workflow 路径应调用 saveAnswerFile",
+	"runWizard 非 workflow 路径应调用 saveAnswerFile(ctx.cwd, prompt)",
 );
 
 // ═══════════════════════════════════════════════════════════════
-//  Test 3: runWizardWithGrill 的非 workflow 路径原有 saveAnswerFile 未被移除
+//  Test 4: runWizardWithGrill 的非 workflow 路径保留 saveAnswerFile
 // ═══════════════════════════════════════════════════════════════
 
-console.log("\n📋 Test 3: runWizardWithGrill 非 workflow 路径保留 saveAnswerFile\n");
+console.log("\n📋 Test 4: runWizardWithGrill 非 workflow 路径保留 saveAnswerFile\n");
 
-// Find the runWizardWithGrill function
 const runWizardWithGrillMatch = source.match(/async function runWizardWithGrill\([\s\S]*?\n\}/);
 assert(runWizardWithGrillMatch !== null, "应找到 runWizardWithGrill 函数");
 
@@ -124,39 +138,29 @@ assert(
 );
 
 // ═══════════════════════════════════════════════════════════════
-//  Test 4: /dev-feat inline handler workflow 路径也调用 saveAnswerFile
+//  Test 5: dev-feat handler 调用 promptWorkflowDecision
 // ═══════════════════════════════════════════════════════════════
 
-console.log("\n📋 Test 4: /dev-feat handler workflow 路径调用 saveAnswerFile\n");
+console.log("\n📋 Test 5: dev-feat handler 调用 promptWorkflowDecision\n");
 
 // Find the dev-feat registerCommand block
-const featMatch = source.match(/pi\.registerCommand\("dev-feat"[\s\S]*?FEAT_WORKFLOW_STEPS \}\);/);
+const featMatch = source.match(/pi\.registerCommand\("dev-feat"[\s\S]*?\n\t\}\);/);
 assert(featMatch !== null, "应找到 /dev-feat handler");
 
 const featHandler = featMatch[0];
-// Check the workflow branch
-const featWorkflowBranch = featHandler.match(/if \(enterWorkflow\) \{[\s\S]*?await runWorkflow\([^;]+\);/);
-assert(featWorkflowBranch !== null, "dev-feat handler 应包含 workflow 分支");
-
-// Check saveAnswerFile appears before runWorkflow in this branch
-const beforeRunIdx = featWorkflowBranch[0].indexOf("await runWorkflow");
-const saveIdx = featWorkflowBranch[0].indexOf("saveAnswerFile");
 assert(
-	saveIdx >= 0 && saveIdx < beforeRunIdx,
-	"dev-feat workflow 分支应在 runWorkflow 前调用 saveAnswerFile",
+	featHandler.includes("promptWorkflowDecision(ctx, pi, finalPrompt, FEAT_WORKFLOW_STEPS)"),
+	"dev-feat handler 应调用 promptWorkflowDecision 并传递 FEAT_WORKFLOW_STEPS",
 );
 
-console.log(`    saveAnswerFile 在位置 ${saveIdx}, runWorkflow 在位置 ${beforeRunIdx}`);
-
 // ═══════════════════════════════════════════════════════════════
-//  Test 5: 所有 saveAnswerFile 调用之前都有 finalPrompt/prompt 已赋值（空安全）
+//  Test 6: 所有 saveAnswerFile 调用之前都有 finalPrompt/prompt 已赋值（空安全）
 // ═══════════════════════════════════════════════════════════════
 
-console.log("\n📋 Test 5: saveAnswerFile 调用时的参数非空\n");
+console.log("\n📋 Test 6: saveAnswerFile 调用时的参数非空\n");
 
-// Count all saveAnswerFile(ctx.cwd, ...) calls
 const saveCalls = source.match(/saveAnswerFile\(ctx\.cwd, \w+\)/g);
-assert(saveCalls !== null && saveCalls.length >= 5, 
+assert(saveCalls !== null && saveCalls.length >= 5,
 	`应找到至少 5 个 saveAnswerFile 调用，实际 ${saveCalls?.length ?? 0}`);
 
 console.log(`   共 ${saveCalls.length} 个 saveAnswerFile 调用`);

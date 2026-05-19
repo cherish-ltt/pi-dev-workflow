@@ -157,17 +157,17 @@ for (let i = 0; i < grillCalls.length; i++) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Test 3: Inline handlers (dev-feat) also pass workflow
+//  Test 3: Inline handlers (dev-feat) call promptWorkflowDecision
 // ═══════════════════════════════════════════════════════════════
 
-console.log("\n📋 Test 3: 内联 handler 的 workflow 调用\n");
+console.log("\n📋 Test 3: 内联 handler 调用 promptWorkflowDecision\n");
 
 // dev-feat: inline handler that calls runWorkflow directly
 const featHandler = source.match(/pi\.registerCommand\("dev-feat"[\s\S]*?FEAT_WORKFLOW_STEPS \}\);/);
 assert(featHandler !== null, "应找到 /dev-feat handler");
 
-const featCallsRunWorkflow = featHandler && featHandler[0].includes("await runWorkflow(ctx, pi, finalPrompt, { steps: FEAT_WORKFLOW_STEPS })");
-assert(featCallsRunWorkflow, "/dev-feat 内联 handler 应调用 runWorkflow 并传递 FEAT_WORKFLOW_STEPS");
+const featCallsPromptDecision = featHandler && featHandler[0].includes("promptWorkflowDecision(ctx, pi, finalPrompt, FEAT_WORKFLOW_STEPS)");
+assert(featCallsPromptDecision, "/dev-feat 内联 handler 应调用 promptWorkflowDecision 并传递 FEAT_WORKFLOW_STEPS");
 
 // dev-workflow-continue: also uses FEAT_WORKFLOW_STEPS
 const continueHandler = source.match(/pi\.registerCommand\("dev-workflow-continue"[\s\S]*?FEAT_WORKFLOW_STEPS \}\);/);

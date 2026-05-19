@@ -548,6 +548,84 @@ function formatWorkflowSteps(steps: WorkflowStepDef[]): string {
 	return steps.map((s, i) => `${i + 1}. ${s.label}`).join("\n");
 }
 
+/**
+ * Prompt user to choose workflow mode and optionally customize sub-agent chain.
+ *
+ * Displays a 3-option menu:
+ *   1. Use the default built-in chain (predefined workflow steps)
+ *   2. Customize: select/deselect steps and set per-step timeout
+ *   3. Skip workflow, send prompt directly to main agent
+ *
+ * Returns true if workflow was started and handled (caller should return immediately).
+ * Returns false if caller should fall through to direct prompt sending.
+ */
+async function promptWorkflowDecision(
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+	finalPrompt: string,
+	defaultSteps: WorkflowStepDef[],
+): Promise<boolean> {
+	if (!defaultSteps || defaultSteps.length === 0) return false;
+
+	ctx.ui.notify(
+		`📋 默认工作流步骤:\n${formatWorkflowSteps(defaultSteps)}`,
+		"info",
+	);
+
+	const choice = await ctx.ui.select(
+		"🚀 选择工作流模式",
+		[
+			"1. 使用默认链式子代理（推荐）",
+			"2. 自定义链式子代理",
+			"3. 退出工作流（直接发送 prompt 给主代理）",
+		],
+	);
+
+	if (!choice || choice.startsWith("3")) {
+		return false;
+	}
+
+	if (choice.startsWith("1")) {
+		saveAnswerFile(ctx.cwd, finalPrompt);
+		await runWorkflow(ctx, pi, finalPrompt, { steps: defaultSteps });
+		return true;
+	}
+
+	// ── Custom mode: let user pick steps and set timeouts ──
+	ctx.ui.notify("🛠️ 请逐项选择需要包含的工作流步骤（可单独设置超时时间）", "info");
+
+	const customSteps: WorkflowStepDef[] = [];
+	for (const step of defaultSteps) {
+		const include = await ctx.ui.confirm(
+			`📌 ${step.label}`,
+			`是否包含此步骤？\n\n类型: ${step.type}\n默认超时: ${(step.timeoutMs / 60000).toFixed(0)} 分钟`,
+		);
+		if (!include) continue;
+
+		const timeoutStr = await ctx.ui.input(
+			`⏱️ ${step.label} - 超时时间(分钟)`,
+			{ placeholder: `留空保持默认 (${(step.timeoutMs / 60000).toFixed(0)} 分钟)`, required: false },
+		);
+		customSteps.push({
+			...step,
+			timeoutMs: timeoutStr ? parseInt(timeoutStr, 10) * 60 * 1000 || step.timeoutMs : step.timeoutMs,
+		});
+	}
+
+	if (customSteps.length === 0) {
+		ctx.ui.notify("⚠️ 未选择任何步骤，将直接发送 prompt", "warning");
+		return false;
+	}
+
+	ctx.ui.notify(
+		`✅ 自定义工作流已创建 (${customSteps.length} 个步骤):\n${formatWorkflowSteps(customSteps)}`,
+		"success",
+	);
+	saveAnswerFile(ctx.cwd, finalPrompt);
+	await runWorkflow(ctx, pi, finalPrompt, { steps: customSteps });
+	return true;
+}
+
 async function runWizardWithGrill(
 	ctx: ExtensionCommandContext,
 	pi: ExtensionAPI,
@@ -591,16 +669,8 @@ async function runWizardWithGrill(
 
 	// ── Workflow phase ───────────────────────────
 	if (workflowConfig && workflowConfig.steps.length > 0) {
-		const enterWorkflow = await ctx.ui.confirm(
-			"🚀 进入自动化工作流",
-			`是否进入自动化工作流？\n\n工作流将自动执行以下步骤：\n${formatWorkflowSteps(workflowConfig.steps)}\n\n选择「否」将直接发送 prompt 给主代理（传统模式）。`,
-		);
-		if (enterWorkflow) {
-			// Persist prompt before workflow (saveAnswerFile previously only ran in the non-workflow path below)
-			saveAnswerFile(ctx.cwd, finalPrompt);
-			await runWorkflow(ctx, pi, finalPrompt, workflowConfig);
-			return;
-		}
+		const handled = await promptWorkflowDecision(ctx, pi, finalPrompt, workflowConfig.steps);
+		if (handled) return;
 	}
 
 	// ── Guard & persist before sending ──────────────────────
@@ -657,16 +727,8 @@ async function runWizard(
 
 	// ── Workflow phase ───────────────────────────
 	if (workflowConfig && workflowConfig.steps.length > 0) {
-		const enterWorkflow = await ctx.ui.confirm(
-			"🚀 进入自动化工作流",
-			`是否进入自动化工作流？\n\n工作流将自动执行以下步骤：\n${formatWorkflowSteps(workflowConfig.steps)}\n\n选择「否」将直接发送 prompt 给主代理（传统模式）。`,
-		);
-		if (enterWorkflow) {
-			// Persist prompt before workflow (saveAnswerFile was absent from both workflow and non-workflow paths)
-			saveAnswerFile(ctx.cwd, prompt);
-			await runWorkflow(ctx, pi, prompt, workflowConfig);
-			return;
-		}
+		const handled = await promptWorkflowDecision(ctx, pi, prompt, workflowConfig.steps);
+		if (handled) return;
 	}
 
 	// Persist prompt before sending
@@ -796,22 +858,10 @@ export default function (pi: ExtensionAPI) {
 			}
 			const finalPrompt = grillResult.enhancedPrompt;
 
-			// ── Phase 4: Ask "enter workflow?" ─────────────────
-			const enterWorkflow = await ctx.ui.confirm(
-				"🚀 进入自动化工作流",
-				"是否进入自动化工作流？\n\n工作流将自动执行以下步骤：\n" +
-				"1. 📋 Planner — 分析代码库并生成实施计划\n" +
-				"2. 🔧 Worker → Reviewer — 实施代码并审查\n" +
-				"3. ✂️ Trimmer → Reviewer — 精简代码并审查\n" +
-				"4. 📝 DocWriter — 更新文档\n\n" +
-				"选择「否」将使用传统模式，直接发送 prompt 给主代理。",
-			);
-
-			if (enterWorkflow) {
-				// Persist prompt before workflow (saveAnswerFile previously only ran in the legacy path below)
-				saveAnswerFile(ctx.cwd, finalPrompt);
-				await runWorkflow(ctx, pi, finalPrompt, { steps: FEAT_WORKFLOW_STEPS });
-				return;
+			// ── Phase 4: Workflow decision ─────────────────
+			if (FEAT_WORKFLOW_STEPS.length > 0) {
+				const handled = await promptWorkflowDecision(ctx, pi, finalPrompt, FEAT_WORKFLOW_STEPS);
+				if (handled) return;
 			}
 
 			// ── Legacy: Send to main agent ──────────────────────
