@@ -14,7 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader, DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { spawnSubagent, extractFinalOutput, type AgentDef } from "./sub-agents";
+import { spawnSubagent, extractFinalOutput, discoverAgents, type AgentDef } from "./sub-agents";
 export type { AgentDef };
 import {
 	Container,
@@ -125,78 +125,10 @@ function writeToolPromptSuffix(outputFilePath: string): string {
 	].join("\n");
 }
 
-const GRILL_AGENT_DEF: AgentDef = {
-	name: "grill-agent",
-	description: "Design review agent — interviews the developer about a feature plan",
-	tools: ["read", "bash", "write"],
-	systemPrompt: [
-		"You are an expert design reviewer. Interview the developer relentlessly about every aspect of the feature plan until reaching shared understanding.",
-		"",
-		"## Rules",
-		"- For EACH question, provide recommended answer OPTIONS (a/b/c format) that the user can pick from",
-		"- Walk down each branch of the design tree, resolving dependencies between decisions one-by-one",
-		"- Be specific — refer to actual code modules, file paths, and architecture decisions",
-		"- Explore the codebase (use read/bash tools) when a question can be answered by looking at existing code",
-		"- Ask questions about: architecture, data flow, edge cases, security, testing, module boundaries, dependencies, error handling, performance, scalability",
-		"- If terminology conflicts with existing project glossary (CONTEXT.md), call it out",
-		"- Sharpen fuzzy language — propose precise canonical terms",
-		"- Stress-test scenarios with specific edge cases",
-		"- Cross-reference with existing code — surface contradictions",
-		"",
-		"## Quantity",
-		"Ask as many questions as needed to thoroughly review the design.",
-		"Do not artificially limit the number — cover architecture, data flow, edge cases, security, testing, module boundaries, dependencies, error handling, and more.",
-		"Typically 15-40 questions for a moderate feature.",
-		"",
-		"## Language",
-		"Questions and options should be in the same language as the feature request (default: Chinese).",
-	].join("\n"),
-	timeoutMs: 300_000, // 5 min
-};
+// ── Default agent definitions (loaded from agents/ directory) ────
 
-const PRD_AGENT_DEF: AgentDef = {
-	name: "prd-agent",
-	description: "PRD writer — synthesizes a PRD from conversation context",
-	tools: ["read", "bash"],
-	systemPrompt: [
-		"You are an expert product spec writer.",
-		"Your task is to create a PRD from the provided conversation context.",
-		"",
-		"## Rules",
-		"- Do NOT ask any questions — just synthesize what you already know",
-		"- Explore the repo to understand the current state of the codebase",
-		"- Use the project's domain vocabulary throughout",
-		"- Use the template below and output ONLY the Markdown content (no JSON wrapper, no preamble)",
-		"",
-		"## Template",
-		"",
-		"# {Feature Name} — PRD",
-		"",
-		"## Problem Statement",
-		"The problem that the user is facing, from the user's perspective.",
-		"",
-		"## Solution",
-		"The solution to the problem, from the user's perspective.",
-		"",
-		"## User Stories",
-		"A numbered list of user stories:",
-		"1. As an <actor>, I want a <feature>, so that <benefit>",
-		"",
-		"## Implementation Decisions",
-		"A list of implementation decisions including modules to build/modify, architectural decisions, schema changes, API contracts.",
-		"Do NOT include specific file paths or code snippets (may become outdated).",
-		"",
-		"## Testing Decisions",
-		"A description of what makes a good test, which modules will be tested, prior art.",
-		"",
-		"## Out of Scope",
-		"Things explicitly out of scope.",
-		"",
-		"## Further Notes",
-		"Any further notes about the feature.",
-	].join("\n"),
-	timeoutMs: 300_000,
-};
+const _defaultGrillAgent = discoverAgents().find(a => a.name === "dev-grill-agent")!;
+const _defaultPrdAgent = discoverAgents().find(a => a.name === "dev-prd-agent")!;
 
 // ── File-based question extraction ───────────────────────────
 
@@ -339,7 +271,7 @@ export async function runGrillPhase(
 		enhancedPrompt: assembledPrompt,
 	};
 
-	const agentDef = options?.agentDef ?? GRILL_AGENT_DEF;
+	const agentDef = options?.agentDef ?? _defaultGrillAgent;
 	const confirmTitle = options?.title ?? "🔍 设计方案评审";
 	const confirmDesc = options?.description ?? "是否进入设计评审 (Grill) 模式？\nAI 会从架构、数据流、边界条件、安全等多个维度挑战你的设计。";
 	const qTitlePrefix = options?.questionTitle ?? "设计方案评审";
@@ -586,7 +518,7 @@ export async function runPRDPhase(
 			context,
 		].join("\n");
 
-		spawnSubagent(PRD_AGENT_DEF, prdTask, ctx.cwd, loader.signal)
+		spawnSubagent(_defaultPrdAgent, prdTask, ctx.cwd, loader.signal)
 			.then((result) => {
 				const output = extractFinalOutput(result.output);
 				done(output && output.length >= 50 ? output : null);

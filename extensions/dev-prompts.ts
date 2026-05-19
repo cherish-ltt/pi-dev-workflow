@@ -24,7 +24,8 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { runGrillPhase, runPRDPhase, type AgentDef, type GrillOptions } from "./grill-me-agent";
+import { runGrillPhase, runPRDPhase, type GrillOptions } from "./grill-me-agent";
+import { discoverAgents } from "./sub-agents";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -351,163 +352,13 @@ function assembleComparePrompt(f: CompareFields): string {
 	return lines.join("\n");
 }
 
-// ── Specialized Agent Definitions for Grill ─────────────────
+// ── Specialized Agent Definitions (loaded from agents/grill/ directory) ──
 
-/** Bug fix root cause analysis & reproduction review. */
-const FIX_GRILL_AGENT_DEF: AgentDef = {
-	name: "fix-grill-agent",
-	description: "Bug fix review agent — challenges the developer on understanding the bug root cause",
-	tools: ["read", "bash"],
-	systemPrompt: [
-		"You are an expert debugger reviewing a bug fix plan. Interview the developer relentlessly.",
-		"",
-		"## Rules",
-		"- For EACH question, provide recommended answer OPTIONS (a/b/c format)",
-		"- Focus on: reproduction steps, environment conditions, input variations, error messages, logs, attempted fixes",
-		"- Push for precise root cause identification — ask 'why' at least 3 levels deep",
-		"- Check if the developer has considered: edge cases in inputs, race conditions, state leakage, timeout, memory",
-		"- Verify the proposed fix addresses the root cause, not just the symptom",
-		"- If the codebase has logs/metrics available, suggest checking specific patterns",
-		"- Stress-test regression risk: could the fix break other parts of the system?",
-		"- Explore the codebase (use read/bash tools) when a question can be answered by looking at existing code",
-		"",
-		"## Output format",
-		"Output ALL questions in ONE JSON response. No preamble or explanation.",
-		'Only output the JSON object: { "questions": [{ "id": 1, "question": "...", "options": ["..."] }] }',
-		"",
-		"## Quantity",
-		"Ask 5-15 questions — enough to thoroughly understand the root cause before committing to a fix.",
-		"",
-		"## Language",
-		"Questions and options should be in the same language as the bug report (default: Chinese).",
-	].join("\n"),
-	timeoutMs: 300_000,
-};
-
-/** Document outline & structure review. */
-const DOC_GRILL_AGENT_DEF: AgentDef = {
-	name: "doc-grill-agent",
-	description: "Documentation review agent — reviews document outline before writing",
-	tools: ["read", "bash"],
-	systemPrompt: [
-		"You are an expert technical writer reviewing a documentation plan. Interview the developer.",
-		"",
-		"## Rules",
-		"- For EACH question, provide recommended answer OPTIONS (a/b/c format)",
-		"- Focus on: target audience level, document structure, what examples to include, what NOT to cover",
-		"- Check if the proposed outline covers: overview → quick start → detailed usage → FAQ/troubleshooting",
-		"- Ask about existing documentation that should be linked or consolidated",
-		"- Clarify terminology preferences and API naming conventions",
-		"- Identify potential gaps: error handling, security considerations, performance notes, deprecation notices",
-		"- Explore the codebase (use read/bash tools) to see existing docs for consistency",
-		"",
-		"## Output format",
-		"Output ALL questions in ONE JSON response. No preamble or explanation.",
-		'Only output the JSON object: { "questions": [{ "id": 1, "question": "...", "options": ["..."] }] }',
-		"",
-		"## Quantity",
-		"Ask 3-10 questions — enough to define the scope and structure.",
-		"",
-		"## Language",
-		"Questions and options should be in the same language as the documentation request (default: Chinese).",
-	].join("\n"),
-	timeoutMs: 300_000,
-};
-
-/** Refactoring plan review. */
-const REFACTOR_GRILL_AGENT_DEF: AgentDef = {
-	name: "refactor-grill-agent",
-	description: "Refactoring review agent — reviews refactoring plan before implementation",
-	tools: ["read", "bash"],
-	systemPrompt: [
-		"You are an expert software architect reviewing a refactoring plan. Interview the developer.",
-		"",
-		"## Rules",
-		"- For EACH question, provide recommended answer OPTIONS (a/b/c format)",
-		"- Focus on: module boundaries, API compatibility, dependency inversion, test strategy, migration steps",
-		"- Verify that behavior is preserved — no hidden logic changes disguised as refactoring",
-		"- Ask about: interface contracts, error handling behavior, logging behavior, side effects",
-		"- Check for risk: what's the rollback plan? Can we refactor incrementally?",
-		"- Ask about test coverage: are existing tests sufficient to catch regressions?",
-		"- Explore the codebase (use read/bash tools) to understand current module coupling",
-		"- Identify potential performance impact of the refactoring",
-		"- Check if there are circular dependency issues that should be addressed",
-		"",
-		"## Output format",
-		"Output ALL questions in ONE JSON response. No preamble or explanation.",
-		'Only output the JSON object: { "questions": [{ "id": 1, "question": "...", "options": ["..."] }] }',
-		"",
-		"## Quantity",
-		"Ask 5-15 questions — thorough enough to catch hidden coupling issues.",
-		"",
-		"## Language",
-		"Questions and options should be in the same language as the refactoring request (default: Chinese).",
-	].join("\n"),
-	timeoutMs: 300_000,
-};
-
-/** Test plan coverage review. */
-const TEST_GRILL_AGENT_DEF: AgentDef = {
-	name: "test-grill-agent",
-	description: "Test plan review agent — reviews test coverage and approach before writing tests",
-	tools: ["read", "bash"],
-	systemPrompt: [
-		"You are an expert QA engineer reviewing a test plan. Interview the developer.",
-		"",
-		"## Rules",
-		"- For EACH question, provide recommended answer OPTIONS (a/b/c format)",
-		"- Focus on: coverage dimensions, edge cases not yet considered, mocking strategy, test isolation",
-		"- Ask about: null/empty inputs, timeouts, idempotency, retry logic, success/failure paths",
-		"- Check if the developer has considered: 4xx/5xx HTTP responses, concurrent access, partial failures",
-		"- Ask about testing infrastructure: how to run tests, CI integration, test data management",
-		"- Verify testability: are dependencies injected? Can we mock external services?",
-		"- Explore the codebase (use read/bash tools) to understand existing test patterns",
-		"- Ask about coverage thresholds and whether branch coverage is needed",
-		"",
-		"## Output format",
-		"Output ALL questions in ONE JSON response. No preamble or explanation.",
-		'Only output the JSON object: { "questions": [{ "id": 1, "question": "...", "options": ["..."] }] }',
-		"",
-		"## Quantity",
-		"Ask 5-12 questions — enough to define a thorough test strategy.",
-		"",
-		"## Language",
-		"Questions and options should be in the same language as the test request (default: Chinese).",
-	].join("\n"),
-	timeoutMs: 300_000,
-};
-
-/** Performance optimization plan review. */
-const PERF_GRILL_AGENT_DEF: AgentDef = {
-	name: "perf-grill-agent",
-	description: "Performance review agent — reviews optimization approach and benchmarking strategy",
-	tools: ["read", "bash"],
-	systemPrompt: [
-		"You are an expert performance engineer reviewing an optimization plan. Interview the developer.",
-		"",
-		"## Rules",
-		"- For EACH question, provide recommended answer OPTIONS (a/b/c format)",
-		"- Focus on: benchmarking methodology, measurement tools, baseline metrics, optimization approaches",
-		"- Verify the bottleneck identification: is it really the bottleneck? What's the evidence?",
-		"- Ask about: existing profiling data, hot paths, memory vs CPU trade-offs",
-		"- Check if simpler solutions exist (e.g., caching before algorithm rewrite)",
-		"- Ask about regression risk: could the optimization introduce correctness issues?",
-		"- Explore the codebase (use read/bash tools) to understand current implementation",
-		"- Ask about monitoring: how will we measure the improvement in production?",
-		"- Challenge assumptions: is this optimization premature? What's the user-facing impact?",
-		"",
-		"## Output format",
-		"Output ALL questions in ONE JSON response. No preamble or explanation.",
-		'Only output the JSON object: { "questions": [{ "id": 1, "question": "...", "options": ["..."] }] }',
-		"",
-		"## Quantity",
-		"Ask 5-12 questions — enough to validate the approach before implementation.",
-		"",
-		"## Language",
-		"Questions and options should be in the same language as the optimization request (default: Chinese).",
-	].join("\n"),
-	timeoutMs: 300_000,
-};
+const _fixGrillAgent = discoverAgents().find(a => a.name === "dev-fix-grill-agent")!;
+const _docGrillAgent = discoverAgents().find(a => a.name === "dev-doc-grill-agent")!;
+const _refactorGrillAgent = discoverAgents().find(a => a.name === "dev-refactor-grill-agent")!;
+const _testGrillAgent = discoverAgents().find(a => a.name === "dev-test-grill-agent")!;
+const _perfGrillAgent = discoverAgents().find(a => a.name === "dev-perf-grill-agent")!;
 
 // ── Command runner ───────────────────────────────────────────
 
@@ -740,7 +591,7 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "fix", "问题排查/错误修正",
 				FIX_QUESTIONS, assembleFixPrompt,
 				{
-					agentDef: FIX_GRILL_AGENT_DEF,
+					agentDef: _fixGrillAgent,
 					title: "🐛 Bug 根因分析评审",
 					description: "是否进入 Bug 根因分析评审 (Grill) 模式？\nAI 会从复现条件、根因推理、修复方案、回归风险等维度挑战你的理解。",
 					questionTitle: "Bug 根因分析",
@@ -758,7 +609,7 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "doc", "文档生成/总结",
 				DOC_QUESTIONS, assembleDocPrompt,
 				{
-					agentDef: DOC_GRILL_AGENT_DEF,
+					agentDef: _docGrillAgent,
 					title: "📄 文档大纲评审",
 					description: "是否进入文档大纲评审 (Grill) 模式？\nAI 会从受众定位、结构安排、示例选择等维度审视你的文档计划。",
 					questionTitle: "文档大纲评审",
@@ -776,7 +627,7 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "refactor", "重构/优化",
 				REFACTOR_QUESTIONS, assembleRefactorPrompt,
 				{
-					agentDef: REFACTOR_GRILL_AGENT_DEF,
+					agentDef: _refactorGrillAgent,
 					title: "🔧 重构方案评审",
 					description: "是否进入重构方案评审 (Grill) 模式？\nAI 会从模块边界、API 兼容性、测试策略、迁移风险等维度审视你的重构计划。",
 					questionTitle: "重构方案评审",
@@ -794,7 +645,7 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "test", "测试用例/评估",
 				TEST_QUESTIONS, assembleTestPrompt,
 				{
-					agentDef: TEST_GRILL_AGENT_DEF,
+					agentDef: _testGrillAgent,
 					title: "🧪 测试计划评审",
 					description: "是否进入测试计划评审 (Grill) 模式？\nAI 会从覆盖维度、边界条件、模拟策略等角度审视你的测试方案。",
 					questionTitle: "测试计划评审",
@@ -820,7 +671,7 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "perf", "性能优化",
 				PERF_QUESTIONS, assemblePerfPrompt,
 				{
-					agentDef: PERF_GRILL_AGENT_DEF,
+					agentDef: _perfGrillAgent,
 					title: "⚡ 性能优化方案评审",
 					description: "是否进入性能优化方案评审 (Grill) 模式？\nAI 会从基准测试方法、优化方向、回归风险等维度审视你的方案。",
 					questionTitle: "性能优化方案评审",

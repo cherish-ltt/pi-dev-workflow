@@ -184,6 +184,7 @@ function inferTimeout(name: string): number {
 	const lc = name.toLowerCase();
 	if (lc.includes("review") || lc.includes("审查")) return REVIEW_TIMEOUT_MS;
 	if (lc.includes("git")) return GIT_TIMEOUT_MS;
+	if (lc.includes("prd")) return REVIEW_TIMEOUT_MS;
 	return DEFAULT_TIMEOUT_MS;
 }
 
@@ -238,20 +239,28 @@ export function discoverAgents(): AgentDef[] {
 	if (!agentsDir) return (_discoveredAgents = []);
 
 	const agents: AgentDef[] = [];
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(agentsDir, { withFileTypes: true });
-	} catch {
-		return (_discoveredAgents = agents);
+
+	/** Recursively walk directory to collect all .md agent definitions. */
+	function scanAgentsDir(dir: string): void {
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			if (entry.name.startsWith(".")) continue; // skip hidden files/dirs
+			const fullPath = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				scanAgentsDir(fullPath);
+			} else if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith(".md")) {
+				const agent = loadAgent(fullPath);
+				if (agent) agents.push(agent);
+			}
+		}
 	}
 
-	for (const entry of entries) {
-		if (!entry.name.endsWith(".md")) continue;
-		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-		const filePath = path.join(agentsDir, entry.name);
-		const agent = loadAgent(filePath);
-		if (agent) agents.push(agent);
-	}
+	scanAgentsDir(agentsDir);
 	return (_discoveredAgents = agents);
 }
 
