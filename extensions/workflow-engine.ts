@@ -33,6 +33,8 @@ import {
 	sendWorkflowResult,
 	setWorkflowCancelCallback,
 	cancelWorkflow,
+	BACK_MARKER,
+	BACK_OPTION_TEXT,
 	type WorkflowStepWidgetState,
 	type WorkflowSubStepWidgetState,
 	type WorkflowWidgetState,
@@ -842,6 +844,52 @@ function registerSignalHandlers(): void {
 
 
 // ═══════════════════════════════════════════════════════════════
+//  Step change rollback (for "back" navigation)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Revert file changes made by a specific step index using git.
+ * This is called when the user selects "back" during step confirmation.
+ *
+ * - "edit" files: git checkout HEAD to restore to committed state
+ * - "new" files: delete the untracked file
+ * - "delete" files: git checkout HEAD to restore the deleted file
+ */
+function revertStepChanges(stepIndex: number): void {
+	const changesForStep = _workflowFileChanges.filter(c => c.stepIndex === stepIndex);
+	if (changesForStep.length === 0) return;
+
+	for (const change of changesForStep) {
+		try {
+			const fullPath = path.join(_workflowCwd, change.filePath);
+			switch (change.type) {
+				case "edit":
+				case "delete":
+					// Restore from git HEAD
+					execSync(`git checkout HEAD -- "${change.filePath}"`, {
+						cwd: _workflowCwd,
+						encoding: "utf8",
+						timeout: 5000,
+						timeoutKill: 1000,
+					});
+					break;
+				case "new":
+					// Delete the newly created file
+					try {
+						if (fs.existsSync(fullPath)) {
+							fs.rmSync(fullPath, { force: true });
+						}
+					} catch { /* ignore if file doesn't exist */ }
+					break;
+			}
+		} catch { /* if git fails, skip this file */ }
+	}
+
+	// Remove the reverted changes from the tracking list
+	_workflowFileChanges = _workflowFileChanges.filter(c => c.stepIndex !== stepIndex);
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  Agent runner (non-blocking, widget-based)
 // ═══════════════════════════════════════════════════════════════
 
@@ -1234,13 +1282,46 @@ async function executeWorkflowBackground(
 		// Pre-populate sub-steps for pending steps so UI shows queued agents
 		populatePredefinedSubSteps(currentStepIndex);
 
+		// ── Helper: handle "back" from any confirmation dialog ──
+		// Returns true if back was handled (caller should continue without execution).
+		const handleBack = async (): Promise<boolean> => {
+			if (currentStepIndex > 0) {
+				// Revert file changes made by the previous step
+				revertStepChanges(currentStepIndex - 1);
+				// Reset previous step state
+				stepStates[currentStepIndex - 1]!.status = "pending";
+				stepStates[currentStepIndex - 1]!.durationMs = undefined;
+				stepStates[currentStepIndex - 1]!.error = undefined;
+				stepStates[currentStepIndex - 1]!.loopCount = undefined;
+				updateWidgetStep(
+					currentStepIndex - 1,
+					steps[currentStepIndex - 1]!.label,
+					"pending",
+				);
+				// Clear sub-steps for the reverted step
+				if (_widgetSteps[currentStepIndex - 1]) {
+					_widgetSteps[currentStepIndex - 1]!.subSteps = [];
+				}
+				currentStepIndex -= 2; // loop will ++, landing on the previous step
+				saveCheckpoint(_workflowCwd, buildCp());
+				return true;
+			}
+			return false;
+		};
+
 		// ── User confirmations (BEFORE timer starts) ──
 
 		// Confirmation for [confirm] steps (attended mode)
 		if (step.type === "confirm" && mode !== "full-auto") {
-			const choice = await uiSelect(ctx, `📌 ${step.label}`, [
+			const items = [
 				"1. 进入此步骤", "2. 自定义输入", "3. 跳过此步骤", "4. 取消工作流",
-			]);
+			];
+			if (currentStepIndex > 0) items.push(BACK_OPTION_TEXT);
+			const choice = await uiSelect(ctx, `📌 ${step.label}`, items);
+			if (choice === BACK_OPTION_TEXT) {
+				if (await handleBack()) continue;
+				return; // can't go back from first step
+			}
 			if (!choice || choice.startsWith("4")) { cancelWorkflow(); return; }
 			if (choice.startsWith("3")) {
 				state.status = "skipped";
@@ -1258,7 +1339,13 @@ async function executeWorkflowBackground(
 
 		// Full-attended: confirm every step
 		if (mode === "full-attended" && step.type !== "confirm") {
-			const choice = await uiSelect(ctx, `📌 ${step.label} — 执行？`, ["1. 执行", "2. 跳过", "3. 取消工作流"]);
+			const items = ["1. 执行", "2. 跳过", "3. 取消工作流"];
+			if (currentStepIndex > 0) items.push(BACK_OPTION_TEXT);
+			const choice = await uiSelect(ctx, `📌 ${step.label} — 执行？`, items);
+			if (choice === BACK_OPTION_TEXT) {
+				if (await handleBack()) continue;
+				return;
+			}
 			if (!choice || choice.startsWith("3")) { cancelWorkflow(); return; }
 			if (choice.startsWith("2")) {
 				state.status = "skipped";
@@ -1270,9 +1357,15 @@ async function executeWorkflowBackground(
 
 		// Attended: confirm loop-group steps (e.g. 实施代码 → 审查)
 		if (step.type === "loop-group" && mode === "attended") {
-			const choice = await uiSelect(ctx, `📌 ${step.label}`, [
+			const items = [
 				"1. 进入此步骤", "2. 跳过此步骤", "3. 取消工作流",
-			]);
+			];
+			if (currentStepIndex > 0) items.push(BACK_OPTION_TEXT);
+			const choice = await uiSelect(ctx, `📌 ${step.label}`, items);
+			if (choice === BACK_OPTION_TEXT) {
+				if (await handleBack()) continue;
+				return;
+			}
 			if (!choice || choice.startsWith("3")) { cancelWorkflow(); return; }
 			if (choice.startsWith("2")) {
 				state.status = "skipped";

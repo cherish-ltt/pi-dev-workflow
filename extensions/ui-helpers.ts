@@ -26,6 +26,7 @@ import {
     wrapTextWithAnsi,
     truncateToWidth,
 } from "@earendil-works/pi-tui";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -33,6 +34,14 @@ type Theme = ExtensionCommandContext["ui"]["theme"];
 type TUI = Parameters<Parameters<ExtensionCommandContext["ui"]["custom"]>[0]>[0];
 
 const WIDGET_KEY = "dev-workflow";
+
+// ── Constants ─────────────────────────────────────────────────
+
+/** Marker returned by uiInput/uiSelect when user triggers "back". */
+export const BACK_MARKER = "__BACK__";
+
+/** The display text for the back option. */
+export const BACK_OPTION_TEXT = "← 返回上一步";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -71,12 +80,22 @@ function dim(theme: Theme, text: string): string {
 /**
  * Show a select list with proper text wrapping.
  * Returns the selected item value, or undefined on cancel (Esc).
+ * When backable=true, prepends "← 返回上一步" as the first item;
+ * caller should check for it via choice === BACK_OPTION_TEXT.
  */
-export function uiSelect(ctx: ExtensionCommandContext, title: string, items: string[]): Promise<string | undefined> {
-    const selectItems: SelectItem[] = items.map((item, i) => ({
-        value: item,
-        label: item,
-    }));
+export function uiSelect(
+    ctx: ExtensionCommandContext,
+    title: string,
+    items: string[],
+    backable = false,
+): Promise<string | undefined> {
+    const selectItems: SelectItem[] = [];
+    if (backable) {
+        selectItems.push({ value: BACK_OPTION_TEXT, label: BACK_OPTION_TEXT });
+    }
+    for (const item of items) {
+        selectItems.push({ value: item, label: item });
+    }
 
     return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
         const container = new Container();
@@ -119,15 +138,23 @@ export function uiSelect(ctx: ExtensionCommandContext, title: string, items: str
 
 /**
  * Show a confirm dialog with proper wrapping.
- * Returns true for Yes, false for No, undefined on cancel.
+ * Returns true for Yes, false for No, "back" for back, undefined on cancel.
  */
-export function uiConfirm(ctx: ExtensionCommandContext, title: string, message?: string): Promise<boolean | undefined> {
+export function uiConfirm(
+    ctx: ExtensionCommandContext,
+    title: string,
+    message?: string,
+    backable = false,
+): Promise<boolean | "back" | undefined> {
     const items: SelectItem[] = [
         { value: "yes", label: "✅ 是" },
         { value: "no", label: "❌ 否" },
     ];
+    if (backable) {
+        items.push({ value: "back", label: BACK_OPTION_TEXT });
+    }
 
-    return ctx.ui.custom<boolean | undefined>((tui, theme, _kb, done) => {
+    return ctx.ui.custom<boolean | "back" | undefined>((tui, theme, _kb, done) => {
         const container = new Container();
 
         container.addChild(new Spacer(1));
@@ -146,16 +173,23 @@ export function uiConfirm(ctx: ExtensionCommandContext, title: string, message?:
         }
 
         container.addChild(new Spacer(1));
-        const selectList = new SelectList(items, 2, {
+        const visibleCount = backable ? 3 : 2;
+        const selectList = new SelectList(items, visibleCount, {
             selectedPrefix: (s) => theme.fg("accent", s),
             selectedText: (s) => theme.fg("accent", s),
         });
-        selectList.onSelect = (item) => done(item.value === "yes");
+        selectList.onSelect = (item) => {
+            if (item.value === "back") done("back" as const);
+            else done(item.value === "yes");
+        };
         selectList.onCancel = () => done(undefined);
         container.addChild(selectList);
 
         container.addChild(new Spacer(1));
-        container.addChild(new Text(theme.fg("dim", "  ↑↓ 导航 • Enter 选择 • Esc 取消"), 0, 0));
+        const hint = backable
+            ? "  ↑↓ 导航 • Enter 选择 • Esc 取消"
+            : "  ↑↓ 导航 • Enter 选择 • Esc 取消";
+        container.addChild(new Text(theme.fg("dim", hint), 0, 0));
 
         return {
             render: (w) => container.render(w),
@@ -172,13 +206,15 @@ export function uiConfirm(ctx: ExtensionCommandContext, title: string, message?:
 
 /**
  * Show an input dialog with proper wrapping.
- * Returns the entered string, or undefined on cancel.
+ * Returns the entered string, or BACK_MARKER on back, or undefined on cancel.
+ * When backable=true, supports Ctrl+Shift+← for back and Ctrl+Shift+→ for submit+next.
  */
 export function uiInput(
     ctx: ExtensionCommandContext,
     label: string,
     placeholder?: string,
     required = false,
+    backable = false,
 ): Promise<string | undefined> {
     return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
         const container = new Container();
@@ -197,16 +233,37 @@ export function uiInput(
             if (required && !val.trim()) return;
             done(val || "");
         };
-        input.onCancel = () => done(undefined);
+        input.onEscape = () => done(undefined);
 
         container.addChild(input);
         container.addChild(new Spacer(1));
-        container.addChild(new Text(theme.fg("dim", "  Enter 确认 • Esc 取消"), 0, 0));
+
+        if (backable) {
+            container.addChild(new Text(
+                theme.fg("dim", "  Enter 确认 • Ctrl+Shift+← 上一步 • Ctrl+Shift+→ 跳过 • Esc 取消"),
+                0, 0,
+            ));
+        } else {
+            container.addChild(new Text(theme.fg("dim", "  Enter 确认 • Esc 取消"), 0, 0));
+        }
 
         return {
             render: (w) => container.render(w),
             invalidate: () => container.invalidate(),
             handleInput: (data) => {
+                // Intercept back/next keys before passing to Input
+                if (backable) {
+                    // Ctrl+Shift+← → go back to previous question
+                    if (matchesKey(data, Key.ctrlShift("left"))) {
+                        done(BACK_MARKER);
+                        return;
+                    }
+                    // Ctrl+Shift+→ → submit current value and go next
+                    if (matchesKey(data, Key.ctrlShift("right"))) {
+                        done(input.getValue() || "");
+                        return;
+                    }
+                }
                 input.handleInput(data);
                 tui.requestRender();
             },
@@ -486,9 +543,7 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                 const lastChildIdx = childItems.length - 1;
                 for (let ci = 0; ci < childItems.length; ci++) {
                     const isLastChild = ci === lastChildIdx;
-                    const childConnector = isLastChild
-                        ? dim(theme, "|__")
-                        : dim(theme, "|  ");
+                    const childConnector = isLastChild ? dim(theme, "|__") : dim(theme, "|  ");
                     lines.push(`${childIndent}${childConnector} ${childItems[ci]!}`);
                 }
             }
@@ -515,8 +570,17 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
     }
 
     // ── Footer hints (金色) ──
+    // if (state.status === "running") {
+    //     const gold = (text: string) => theme.fg("warning", text);
+    //     lines.push(` ${gold("Ctrl+O 展开详情")} ${dim(theme, "|")} ${gold("Escape 取消")}`);
+    // }
     if (state.status === "running") {
         const gold = (text: string) => theme.fg("warning", text);
+        if (!expanded) {
+            lines.push(` ${gold("Ctrl+O 展开详情")} ${dim(theme, "|")} ${gold("Escape 取消")}`);
+        } else {
+            lines.push(` ${dim(theme, "Ctrl+O 折叠详情")} ${dim(theme, "|")} ${gold("Escape 取消")}`);
+        }
         lines.push(` ${gold("Ctrl+O 展开详情")} ${dim(theme, "|")} ${gold("Escape 取消")}`);
     }
 
@@ -732,22 +796,13 @@ function extractFileChanges(steps: WorkflowStepWidgetState[]): {
         return root;
     }
 
-    function renderTreeNode(
-        node: TreeNode,
-        prefix: string,
-        isLast: boolean,
-        lines: string[],
-    ): void {
+    function renderTreeNode(node: TreeNode, prefix: string, isLast: boolean, lines: string[]): void {
         const connector = isLast ? "└── " : "├── ";
         lines.push(`${prefix}${connector}${node.name}`);
         renderChildren(node, prefix + (isLast ? "    " : "│   "), lines);
     }
 
-    function renderChildren(
-        node: TreeNode,
-        prefix: string,
-        lines: string[],
-    ): void {
+    function renderChildren(node: TreeNode, prefix: string, lines: string[]): void {
         const entries = [...node.children.entries()].sort((a, b) => {
             // Directories before files, then alphabetical
             if (a[1].isFile !== b[1].isFile) return a[1].isFile ? 1 : -1;
@@ -776,7 +831,9 @@ function extractFileChanges(steps: WorkflowStepWidgetState[]): {
     }
 
     // ── Count by type ─────────────────────────────────────────
-    let edits = 0, news = 0, deletes = 0;
+    let edits = 0,
+        news = 0,
+        deletes = 0;
     for (const [fp, type] of allPaths) {
         if (type === "edit") edits++;
         else if (type === "new" || type === "output") news++;

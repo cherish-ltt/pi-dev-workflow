@@ -27,17 +27,18 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { runGrillPhase, runPRDPhase, saveAnswerFile, recoverFromBackup, type GrillOptions } from "./grill-me-agent";
 import { discoverAgents } from "./sub-agents";
 import { runWorkflow, loadCheckpointFromFile, type WorkflowStepDef } from "./workflow-engine";
-import { uiSelect, uiConfirm, uiInput } from "./ui-helpers";
+import { uiSelect, uiConfirm, uiInput, BACK_MARKER } from "./ui-helpers";
 
 // ── Helpers ──────────────────────────────────────────────────
 
-/** Ask a single question with proper wrapping. Returns `undefined` on cancel (Esc). */
+/** Ask a single question with proper wrapping. Returns `undefined` on cancel (Esc), or BACK_MARKER for back. */
 async function ask(
 	ctx: ExtensionCommandContext,
 	label: string,
 	placeholder: string,
+	backable = false,
 ): Promise<string | undefined> {
-	return uiInput(ctx, label, placeholder);
+	return uiInput(ctx, label, placeholder, false, backable);
 }
 
 /** Check if a field value is empty or explicitly "无". */
@@ -571,25 +572,56 @@ async function promptWorkflowDecision(
 		return true;
 	}
 
-	// ── Custom mode: let user pick steps and set timeouts ──
+	// ── Custom mode: let user pick steps and set timeouts (with back support) ──
 	const customSteps: WorkflowStepDef[] = [];
-	for (const step of defaultSteps) {
+	let stepIdx = 0;
+	while (stepIdx >= 0 && stepIdx < defaultSteps.length) {
+		const step = defaultSteps[stepIdx]!;
+
+		// If this step was already added, show current config, else show default
+		const existingStep = customSteps.find(cs => cs.id === step.id);
 		const include = await uiConfirm(
 			ctx,
-			`📌 ${step.label}`,
+			`📌 ${step.label}${existingStep ? ' (已添加)' : ''}`,
 			`类型: ${step.type}\n默认超时: ${(step.timeoutMs / 60000).toFixed(0)} 分钟`,
+			stepIdx > 0, // backable only after first step
 		);
-		if (!include) continue;
+		if (include === "back") {
+			// Go back: remove the last added step
+			if (customSteps.length > 0) {
+				customSteps.pop();
+				stepIdx--;
+				continue;
+			}
+			return false; // nothing to go back to
+		}
+		if (include === undefined) return false; // Esc
 
+		if (!include) {
+			stepIdx++;
+			continue; // skip this step
+		}
+
+		const existingTimeout = existingStep?.timeoutMs;
 		const timeoutStr = await uiInput(
 			ctx,
 			`⏱️ ${step.label} - 超时时间(分钟)`,
-			`留空保持默认 (${(step.timeoutMs / 60000).toFixed(0)} 分钟)`,
+			existingTimeout
+				? `当前: ${(existingTimeout / 60000).toFixed(0)} 分钟，留空保持`
+				: `留空保持默认 (${(step.timeoutMs / 60000).toFixed(0)} 分钟)`,
 		);
-		customSteps.push({
-			...step,
-			timeoutMs: timeoutStr ? parseInt(timeoutStr, 10) * 60 * 1000 || step.timeoutMs : step.timeoutMs,
-		});
+		if (timeoutStr === undefined) { stepIdx++; continue; } // Esc on input = skip
+
+		if (existingStep) {
+			// Update existing step's timeout
+			existingStep.timeoutMs = timeoutStr ? parseInt(timeoutStr, 10) * 60 * 1000 || step.timeoutMs : step.timeoutMs;
+		} else {
+			customSteps.push({
+				...step,
+				timeoutMs: timeoutStr ? parseInt(timeoutStr, 10) * 60 * 1000 || step.timeoutMs : step.timeoutMs,
+			});
+		}
+		stepIdx++;
 	}
 
 	if (customSteps.length === 0) {
@@ -612,12 +644,27 @@ async function runWizardWithGrill(
 	workflowConfig?: { steps: WorkflowStepDef[] },
 ): Promise<void> {
 	const answers: Record<string, string> = {};
-	for (const q of questions) {
-		const val = await ask(ctx, q.label, q.placeholder);
+	let idx = 0;
+
+	while (idx >= 0 && idx < questions.length) {
+		const q = questions[idx]!;
+		const existingVal = answers[q.key];
+		const placeholder = existingVal
+			? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
+			: q.placeholder;
+		const val = await ask(ctx, q.label, placeholder, true);
 		if (val === undefined) {
 			return;
 		}
+		if (val === BACK_MARKER) {
+			if (idx > 0) {
+				idx--;
+				continue;
+			}
+			return;
+		}
 		answers[q.key] = val;
+		idx++;
 	}
 
 	const basePrompt = assembler(answers);
@@ -670,13 +717,30 @@ async function runWizard(
 	workflowConfig?: { steps: WorkflowStepDef[] },
 ): Promise<void> {
 	const answers: Record<string, string> = {};
+	let idx = 0;
 
-	for (const q of questions) {
-		const val = await ask(ctx, q.label, q.placeholder);
+	while (idx >= 0 && idx < questions.length) {
+		const q = questions[idx]!;
+		const existingVal = answers[q.key];
+		const placeholder = existingVal
+			? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
+			: q.placeholder;
+		const val = await ask(ctx, q.label, placeholder, true);
 		if (val === undefined) {
+			// Esc → cancel whole wizard
+			return;
+		}
+		if (val === BACK_MARKER) {
+			// Go back to previous question
+			if (idx > 0) {
+				idx--;
+				continue;
+			}
+			// Already at first question → cancel
 			return;
 		}
 		answers[q.key] = val;
+		idx++;
 	}
 
 	const prompt = assembler(answers);
@@ -787,12 +851,26 @@ export default function (pi: ExtensionAPI) {
 		description: "(prompt wizard) 新功能/创意生成 — 支持设计评审 (Grill) + 自动化工作流",
 		handler: async (_args, ctx) => {
 			const answers: Record<string, string> = {};
-			for (const q of FEAT_QUESTIONS) {
-				const val = await ask(ctx, q.label, q.placeholder);
+			let featIdx = 0;
+			while (featIdx >= 0 && featIdx < FEAT_QUESTIONS.length) {
+				const q = FEAT_QUESTIONS[featIdx]!;
+				const existingVal = answers[q.key];
+				const placeholder = existingVal
+					? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
+					: q.placeholder;
+				const val = await ask(ctx, q.label, placeholder, true);
 				if (val === undefined) {
 					return;
 				}
+				if (val === BACK_MARKER) {
+					if (featIdx > 0) {
+						featIdx--;
+						continue;
+					}
+					return;
+				}
 				answers[q.key] = val;
+				featIdx++;
 			}
 
 			const basePrompt = assembleFeatPrompt(answers as FeatFields);
