@@ -585,7 +585,6 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
         } else {
             lines.push(` ${dim(theme, "Ctrl+O 折叠详情")} ${dim(theme, "|")} ${gold("Escape 取消")}`);
         }
-        lines.push(` ${gold("Ctrl+O 展开详情")} ${dim(theme, "|")} ${gold("Escape 取消")}`);
     }
 
     return lines;
