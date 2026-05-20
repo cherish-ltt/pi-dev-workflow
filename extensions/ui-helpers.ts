@@ -313,15 +313,15 @@ function formatTimeout(ms: number): string {
  * ⠋ 工作流 · 值守模式 · 6m16s
  *        ✓ 📋生成实施计划 (1m59s/超时时间15m)
  *          |__ planner ·
- *             |__ output:pi-dev-output/pi-plans/20260520-1628-export-kcp-public2-api.md
+ *             |__ output:.pi-dev-output/pi-plans/20260520-1628-export-kcp-public2-api.md
  *     ▶ ⠋ 🔧实施代码 → 审查 · 第 1 次循环  (1s/超时时间15m)
  *         |__ worker ·
  *             |   edit:代码xxx.rs
  *             |   edit:代码xxx.rs
  *             |__ new:代码xxx.ts
  *         |__ reviewer ·
- *             |   output:pi-dev-output/pi-review/md/review-20260520-180001.md
- *             |__ output:pi-dev-output/pi-review/md/review-20260520-180002.md
+ *             |   output:.pi-dev-output/pi-review/md/review-20260520-180001.md
+ *             |__ output:.pi-dev-output/pi-review/md/review-20260520-180002.md
  *       ◦ ✂️ 精简代码 → 审查 · 第 0 次循环
  *         |__ trimmer ·
  *             |__ 正在排队
@@ -674,7 +674,7 @@ function extractFileChanges(steps: WorkflowStepWidgetState[]): {
                 for (const o of sub.outputs) {
                     // Only track output files that look like actual generated docs
                     if (
-                        o.includes("pi-dev-output") ||
+                        o.includes(".pi-dev-output") ||
                         o.includes(".md") ||
                         o.includes("review-") ||
                         o.includes("pi-plans") ||
@@ -845,7 +845,7 @@ function extractTaskSummary(prompt: string): string {
  * ├── extensions
  * │   ├── xxxx1.ts
  * │   ├── xxxx2.ts
- * ├── pi-dev-output
+ * ├── .pi-dev-output
  * │   ├── pi-plans
  * │   │   └── 20260519-2155-workflow-ui-async-refactor.md
  * ├── tests

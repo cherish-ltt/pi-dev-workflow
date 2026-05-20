@@ -15,7 +15,7 @@ A deep module (as opposed to a shallow module) is one which encapsulates a lot o
 
 Check with the user that these modules match their expectations. Check with the user which modules they want tests written for.
 
-3. Write the PRD using the template below, then save it to `pi-dev-output/pi-prd/` directory.
+3. Write the PRD using the template below, then save it to `.pi-dev-output/pi-prd/` directory.
 
 <prd-template>
 

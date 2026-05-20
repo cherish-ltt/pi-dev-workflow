@@ -49,8 +49,8 @@ description: review 代码并输出交互式 HTML 报告。适用于代码审查
 1. 根据用户指令运行 `git diff HEAD` 或 `git log -p -n <N>` 获取改动，或遍历代码库。
 2. 合并改动，按文件分组。
 3. 对每个文件进行审查，并生成符合上述要求的 HTML。
-4. 自动确保 `pi-dev-output/pi-review/html/` 文件夹存在于项目根目录，若不存在则创建；并确保 `pi-dev-output/` 下的 `.gitignore` 包含 `*`（忽略所有内容但保留目录）。
+4. 自动确保 `.pi-dev-output/pi-review/html/` 文件夹存在于项目根目录，若不存在则创建。
 5. HTML 文件命名格式：`年月日时分-任务简述(极简10词以内)-index.html`，若同名文件已存在则编号递增（如 `index1.html`）。
-6. 直接输出 HTML 文件到 `pi-dev-output/pi-review/html/` 目录，**不要添加任何解释性文字**，仅简短说明工作完成和输出文件路径即可。
+6. 直接输出 HTML 文件到 `.pi-dev-output/pi-review/html/` 目录，**不要添加任何解释性文字**，仅简短说明工作完成和输出文件路径即可。
 
 请严格遵循以上规则。

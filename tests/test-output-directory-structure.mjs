@@ -1,14 +1,14 @@
 /**
  * test-output-directory-structure.mjs — 验证输出目录结构调整正确
  *
- * Bug: 原先 pi-dev-output/pi-grill/ 直接存放 answer-*.md 和 questions-*.json，
- * pi-dev-output/pi-review/ 直接存放 *.html 和 *.md，没有分类子目录。
+ * Bug: 原先 .pi-dev-output/pi-grill/ 直接存放 answer-*.md 和 questions-*.json，
+ * .pi-dev-output/pi-review/ 直接存放 *.html 和 *.md，没有分类子目录。
  *
  * 预期新结构：
- *   pi-dev-output/pi-grill/questions/  → questions-<id>-<YYYYMMDD-HHmm>.json
- *   pi-dev-output/pi-grill/answers/    → answer-<id>-<YYYYMMDD-HHmm>.md
- *   pi-dev-output/pi-review/html/      → *.html
- *   pi-dev-output/pi-review/md/        → *.md
+ *   .pi-dev-output/pi-grill/questions/  → questions-<id>-<YYYYMMDD-HHmm>.json
+ *   .pi-dev-output/pi-grill/answers/    → answer-<id>-<YYYYMMDD-HHmm>.md
+ *   .pi-dev-output/pi-review/html/      → *.html
+ *   .pi-dev-output/pi-review/md/        → *.md
  *
  * Run: node tests/test-output-directory-structure.mjs
  */
@@ -87,7 +87,7 @@ assertNotIncludes(grillMe, oldQuestionsPattern, "grillOutputPath 不使用旧格
 console.log("\n📋 sub-agents.ts — findNewestReviewHtml 搜索路径\n");
 
 const subAgents = fs.readFileSync(SUB_AGENTS_PATH, "utf-8");
-assertIncludes(subAgents, '"pi-dev-output", "pi-review", "html"', "findNewestReviewHtml 优先搜索 pi-review/html/");
+assertIncludes(subAgents, '".pi-dev-output", "pi-review", "html"', "findNewestReviewHtml 优先搜索 pi-review/html/");
 
 // ═══════════════════════════════════════════════════════════════
 //  3. workflow-engine.ts — reviewer 报告写入路径
@@ -96,7 +96,7 @@ assertIncludes(subAgents, '"pi-dev-output", "pi-review", "html"', "findNewestRev
 console.log("\n📋 workflow-engine.ts — buildReviewTask 输出路径\n");
 
 const workflowEngine = fs.readFileSync(WORKFLOW_PATH, "utf-8");
-assertIncludes(workflowEngine, "pi-dev-output/pi-review/md/", "buildReviewTask 告诉 reviewer 写入 pi-review/md/");
+assertIncludes(workflowEngine, ".pi-dev-output/pi-review/md/", "buildReviewTask 告诉 reviewer 写入 pi-review/md/");
 
 // ═══════════════════════════════════════════════════════════════
 //  4. agent 定义文件一致性
@@ -106,15 +106,15 @@ console.log("\n📋 Agent 定义文件路径一致性\n");
 
 const reviewAgent = fs.readFileSync(
 	path.resolve(__dirname, "../agents/review-agent.md"), "utf-8");
-assertIncludes(reviewAgent, "pi-dev-output/pi-review/html/",
-	"review-agent 写入 pi-dev-output/pi-review/html/");
-assertNotIncludes(reviewAgent, "pi-dev-output/pi-review/ 目录",
-	"review-agent 不再引用旧的 pi-dev-output/pi-review/ (无子目录)");
+assertIncludes(reviewAgent, ".pi-dev-output/pi-review/html/",
+	"review-agent 写入 .pi-dev-output/pi-review/html/");
+assertNotIncludes(reviewAgent, ".pi-dev-output/pi-review/ 目录",
+	"review-agent 不再引用旧的 .pi-dev-output/pi-review/ (无子目录)");
 
 const workflowReviewer = fs.readFileSync(
 	path.resolve(__dirname, "../agents/workflow/reviewer-agent.md"), "utf-8");
-assertIncludes(workflowReviewer, "pi-dev-output/pi-review/md/",
-	"workflow/reviewer-agent 写入 pi-dev-output/pi-review/md/");
+assertIncludes(workflowReviewer, ".pi-dev-output/pi-review/md/",
+	"workflow/reviewer-agent 写入 .pi-dev-output/pi-review/md/");
 
 // ═══════════════════════════════════════════════════════════════
 //  5. review-html SKILL 路径一致性
@@ -124,10 +124,10 @@ console.log("\n📋 skills/review-html 路径一致性\n");
 
 const reviewSkill = fs.readFileSync(
 	path.resolve(__dirname, "../skills/review-html/SKILL.md"), "utf-8");
-assertIncludes(reviewSkill, "pi-dev-output/pi-review/html/",
-	"review-html skill 写入 pi-dev-output/pi-review/html/");
-assertNotIncludes(reviewSkill, "pi-dev-output/pi-review/ 目录",
-	"review-html skill 不再引用旧的 pi-dev-output/pi-review/ (无子目录)");
+assertIncludes(reviewSkill, ".pi-dev-output/pi-review/html/",
+	"review-html skill 写入 .pi-dev-output/pi-review/html/");
+assertNotIncludes(reviewSkill, ".pi-dev-output/pi-review/ 目录",
+	"review-html skill 不再引用旧的 .pi-dev-output/pi-review/ (无子目录)");
 
 // ═══════════════════════════════════════════════════════════════
 //  6. 文件名格式验证：saveAnswerFile 和 grillOutputPath 生成的名称含时间戳

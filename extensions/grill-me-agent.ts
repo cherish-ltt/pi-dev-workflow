@@ -3,7 +3,7 @@
  *
  * 职责：
  *   1. runGrillPhase()  — 启动 sub-agent 生成评审问题，TUI 逐题呈现（选项 + 自定义输入）
- *   2. runPRDPhase()    — 启动 sub-agent 生成 PRD，保存到 pi-dev-output/pi-prd/
+ *   2. runPRDPhase()    — 启动 sub-agent 生成 PRD，保存到 .pi-dev-output/pi-prd/
  *
  * 关键设计决策（修复 #2）：
  *   sub-agent 通过 `write` 工具将评审问题写入临时文件，主进程事后读取。
@@ -54,25 +54,16 @@ export interface PRDResult {
 
 // ── Output dirs ──────────────────────────────────────────────
 
-const DEV_OUTPUT_DIR = "pi-dev-output";
+const DEV_OUTPUT_DIR = ".pi-dev-output";
 const GRILL_DIRNAME = "pi-grill";
 const GRILL_ANSWERS_DIRNAME = "answers";
 const GRILL_QUESTIONS_DIRNAME = "questions";
 const PRD_DIRNAME = "pi-prd";
 
-/** Ensure an output subdirectory exists and write .gitignore. */
+/** Ensure an output subdirectory exists. */
 function ensureOutputDir(cwd: string, subdir: string): string {
 	const dir = path.join(cwd, DEV_OUTPUT_DIR, subdir);
 	fs.mkdirSync(dir, { recursive: true });
-	const gitignorePath = path.join(cwd, DEV_OUTPUT_DIR, ".gitignore");
-	try {
-		const existing = fs.readFileSync(gitignorePath, "utf-8").trim();
-		if (!existing.includes("*")) {
-			fs.writeFileSync(gitignorePath, "*\n!.gitignore\n");
-		}
-	} catch {
-		fs.writeFileSync(gitignorePath, "*\n!.gitignore\n");
-	}
 	return dir;
 }
 
@@ -638,7 +629,7 @@ async function showQuestionTUI(
  * Run the PRD phase:
  * 1. Ask user if they want to create a PRD
  * 2. Call sub-agent → gets PRD Markdown
- * 3. Save to pi-dev-output/pi-prd/<name>.md
+ * 3. Save to .pi-dev-output/pi-prd/<name>.md
  * 4. Ask if user wants to start development
  */
 export async function runPRDPhase(
@@ -650,7 +641,7 @@ export async function runPRDPhase(
 	const wantPrd = await uiConfirm(
 		ctx,
 		"📋 创建 PRD",
-		"PRD 将保存到 pi-dev-output/pi-prd/ 目录。",
+		"PRD 将保存到 .pi-dev-output/pi-prd/ 目录。",
 	);
 	if (!wantPrd) return null;
 

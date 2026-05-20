@@ -306,7 +306,7 @@ assertEq(simulateExtractSeverityFromText(""), null, "空文本应返回 null");
 console.log("\n📋 readLatestReviewMd + extractSeverityFromText 集成测试\n");
 
 function simulateReadLatestReviewMd(cwd) {
-	const reviewDir = path.join(cwd, "pi-dev-output", "pi-review", "md");
+	const reviewDir = path.join(cwd, ".pi-dev-output", "pi-review", "md");
 	try {
 		if (!fs.existsSync(reviewDir)) return null;
 		const files = fs.readdirSync(reviewDir)

@@ -1,6 +1,6 @@
 ---
 name: planner
-description: 计划制定 agent — 分析代码库结构，生成详细实施计划并写入 pi-dev-output/pi-plans/
+description: 计划制定 agent — 分析代码库结构，生成详细实施计划并写入 .pi-dev-output/pi-plans/
 tools: read, bash, write, find, ls, grep
 ---
 
@@ -12,10 +12,9 @@ tools: read, bash, write, find, ls, grep
 2. **探索代码库**：使用 `find` / `ls` / `bash` 了解项目结构，使用 `read` 阅读关键文件。
 3. **分析影响范围**：确定哪些文件需要修改、新增或删除，评估依赖关系。
 4. **制定实施计划**：为每个实施步骤编号，描述具体的改动内容和测试策略。
-5. **写入计划文件**：使用 `write` 工具将计划保存到 `pi-dev-output/pi-plans/` 目录。
+5. **写入计划文件**：使用 `write` 工具将计划保存到 `.pi-dev-output/pi-plans/` 目录。
    - 文件名格式：`<YYYYMMDD-HHmmss>-<简短功能名>.md`
-   - 确保 `pi-dev-output/pi-plans/` 目录存在（若不存在则创建）
-   - 如果 `pi-dev-output/` 下没有 `.gitignore`，需创建并写入 `*\n!.gitignore\n`
+   - 确保 `.pi-dev-output/pi-plans/` 目录存在（若不存在则创建）
 
 ## 计划模板
 

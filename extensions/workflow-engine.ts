@@ -114,7 +114,7 @@ interface CheckpointData {
 //  Constants
 // ═══════════════════════════════════════════════════════════════
 
-const DEV_OUTPUT_DIR = "pi-dev-output";
+const DEV_OUTPUT_DIR = ".pi-dev-output";
 const CHECKPOINT_FILE = path.join(DEV_OUTPUT_DIR, "pi-workflow", "checkpoint.json");
 const PLANS_DIR = path.join(DEV_OUTPUT_DIR, "pi-plans");
 
@@ -125,15 +125,6 @@ const PLANS_DIR = path.join(DEV_OUTPUT_DIR, "pi-plans");
 function ensureOutputDir(cwd: string, subdir: string): string {
 	const dir = path.join(cwd, DEV_OUTPUT_DIR, subdir);
 	fs.mkdirSync(dir, { recursive: true });
-	const gitignorePath = path.join(cwd, DEV_OUTPUT_DIR, ".gitignore");
-	try {
-		const existing = fs.readFileSync(gitignorePath, "utf-8").trim();
-		if (!existing.includes("*")) {
-			fs.writeFileSync(gitignorePath, "*\n!.gitignore\n");
-		}
-	} catch {
-		fs.writeFileSync(gitignorePath, "*\n!.gitignore\n");
-	}
 	return dir;
 }
 
@@ -503,7 +494,7 @@ function buildTaskForStep(
 ): string {
 	if (agentName === "planner") {
 		return [
-			"请根据以下功能需求，分析代码库结构，生成详细的实施计划，并写入 pi-dev-output/pi-plans/ 目录。",
+			"请根据以下功能需求，分析代码库结构，生成详细的实施计划，并写入 .pi-dev-output/pi-plans/ 目录。",
 			"",
 			"## 功能需求",
 			prompt,
@@ -563,7 +554,7 @@ function buildReviewTask(
 	const parts = [
 		"请审查当前代码库中针对以下功能的实现。",
 		"检查是否有 bug、逻辑错误、未完成的功能、代码质量问题。",
-		"将详细审查报告写入 pi-dev-output/pi-review/md/ 目录。",
+		"将详细审查报告写入 .pi-dev-output/pi-review/md/ 目录。",
 		"在回复末尾输出以下格式的结构化摘要（必须包含）：",
 		"[REVIEW_SUMMARY]",
 		'{"maxSeverity":"critical|medium|low","critical":N,"medium":N,"low":N}',
@@ -907,8 +898,8 @@ async function runAgentWithProgress(
 				_widgetExtraToolCount++;
 			}
 		}
-		// Detect output file paths — ONLY match explicit pi-dev-output paths, never free-form text
-		const outputMatch = progress.match(/pi-dev-output\/[^\s,;)\]}]{5,}\.\w+/i);
+		// Detect output file paths — ONLY match explicit .pi-dev-output paths, never free-form text
+		const outputMatch = progress.match(/\.pi-dev-output\/[^\s,;)\]}]{5,}\.\w+/i);
 		if (outputMatch) {
 			const pathCandidate = outputMatch[0]!.trim();
 			if (pathCandidate.length > 15 && pathCandidate.length < 300) {
@@ -1019,14 +1010,14 @@ async function runAgentWithProgress(
 		}
 	}
 
-	// Find output file paths (pi-dev-output, review reports, plan files)
-	// NOTE: Only match explicit paths in pi-dev-output/ or known review/plan file patterns.
+	// Find output file paths (.pi-dev-output, review reports, plan files)
+	// NOTE: Only match explicit paths in .pi-dev-output/ or known review/plan file patterns.
 	// The old pattern matching loose "output:" text was the root cause of "output::0.00004508" noise.
 	// File change detection now relies on git diff --name-status (updateToolsFromGit below),
 	// which is deterministic and noise-free.
 	const outputPathPatterns = [
-		// Direct reference to pi-dev-output paths: "pi-dev-output/pi-plans/xxx.md"
-		/pi-dev-output\/[a-zA-Z0-9_\/-]+\.[a-zA-Z0-9]+/g,
+		// Direct reference to .pi-dev-output paths: ".pi-dev-output/pi-plans/xxx.md"
+		/\.pi-dev-output\/[a-zA-Z0-9_\/-]+\.[a-zA-Z0-9]+/g,
 		// Review file patterns: "review-20260520-162800.md"
 		/review-\d{8}-\d{6}\.md/g,
 		// Plan file patterns: "20260520-1628-*.md"
