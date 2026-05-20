@@ -1188,19 +1188,19 @@ async function executeLoopGroup(
 		let agentResult = await runAgentWithProgress(loopAgent, loopTask, stepIndex, step.loopAgentName!, step.timeoutMs);
 
 		// 检查 agent 是否异常退出（非超时非零退出码）
-		if (agentResult.exitCode !== 0 && !isTimeoutResult(agentResult)) {
-			if (mode === "full-auto") {
-				throw new Error(`Agent ${step.loopAgentName} 异常退出 (exit ${agentResult.exitCode}): ${agentResult.stderr.slice(0, 200)}`);
-			} else {
-				const choice = await uiSelect(ctx, `❌ ${step.loopAgentName} 异常退出 (exit ${agentResult.exitCode})`, [
-					"1. 重新执行", "2. 跳过此步骤", "3. 取消工作流",
-				]);
-				if (!choice || choice.startsWith("3")) { cancelWorkflow(); return; }
-				if (choice.startsWith("2")) { state.status = "skipped"; return; }
-				// 重新执行
-				agentResult = await runAgentWithProgress(loopAgent, `[RETRY]\n\n${loopTask}`, stepIndex, step.loopAgentName!, step.timeoutMs);
-			}
-		}
+        while (agentResult.exitCode !== 0 && !isTimeoutResult(agentResult)) {
+            if (mode === "full-auto") {
+                throw new Error(`Agent ${step.loopAgentName} 异常退出 (exit ${agentResult.exitCode}): ${agentResult.stderr.slice(0, 200)}`);
+            } else {
+                const choice = await uiSelect(ctx, `❌ ${step.loopAgentName} 异常退出 (exit ${agentResult.exitCode})`, [
+                    "1. 重新执行", "2. 跳过此步骤", "3. 取消工作流",
+                ]);
+                if (!choice || choice.startsWith("3")) { cancelWorkflow(); return; }
+                if (choice.startsWith("2")) { state.status = "skipped"; return; }
+                // 重新执行
+                agentResult = await runAgentWithProgress(loopAgent, `[RETRY]\n\n${loopTask}`, stepIndex, step.loopAgentName!, step.timeoutMs);
+            }
+        }
 
 		if (isTimeoutResult(agentResult)) {
 			if (mode === "full-auto") {
