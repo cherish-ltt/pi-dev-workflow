@@ -263,33 +263,62 @@ export function extractTaskSummary(prompt: string): string {
 // ── Git diff-based file change detection ──────────────────────
 
 /**
- * Run git diff to detect actual file changes since the last known state.
- * Returns an array of { type, path } entries.
+ * TypeScript struct for a parsed git file change entry.
+ * `status` uses git's canonical single-letter codes: M (modify), A (add), D (delete).
  */
-function getGitDiffChanges(cwd: string): Array<{ type: "edit" | "new" | "delete"; path: string }> {
-	const changes: Array<{ type: "edit" | "new" | "delete"; path: string }> = [];
+interface GitFileChange {
+	status: "M" | "A" | "D";
+	path: string;
+}
+
+/**
+ * Run `git diff --name-status` to detect file changes against HEAD.
+ * This is far more reliable than scraping AI text output for file paths.
+ *
+ * Uses `git diff --name-status HEAD` for modified/deleted files, and
+ * `git status --porcelain` to catch untracked (new) files.
+ *
+ * Returns an array of { status, path } where status is "M"/"A"/"D" matching
+ * git's own format, ready for direct display in the widget.
+ */
+function getGitDiffChanges(cwd: string): GitFileChange[] {
+	const changes: GitFileChange[] = [];
+	const seen = new Set<string>();
+
 	try {
-		// Use git status --porcelain to get all changes (modified, new, deleted, untracked)
-		const status = execSync("git status --porcelain", { cwd, encoding: "utf8", timeout: 5000 }).trim();
-		if (status) {
-			for (const line of status.split("\n")) {
+		// 1. `git diff --name-status` — shows modified (M) and deleted (D) vs HEAD
+		const diffOutput = execSync("git diff --name-status", { cwd, encoding: "utf8", timeout: 5000 }).trim();
+		if (diffOutput) {
+			for (const line of diffOutput.split("\n")) {
 				const trimmed = line.trim();
-				// Format: "XY path" where X is index status, Y is working tree status
-				// "?? path" means untracked/new
-				// "M  path" or " M path" means modified
-				// "D  path" or " D path" means deleted
-				// "R  path" means renamed
-				const match = trimmed.match(/^(\?\?|[MADRCU]\s|[\s][MADRCU])\s+(.+)$/);
+				if (!trimmed) continue;
+				// Format: "M\tpath/to/file" or "D\tpath/to/file"
+				const match = trimmed.match(/^([MAD])\s+(.+)$/);
 				if (match) {
-					const statusStr = match[1].trim();
-					const path = match[2].trim();
-					const type = statusStr === "??" || statusStr === "A"
-						? "new" as const
-						: statusStr === "D"
-						  ? "delete" as const
-						  : "edit" as const;
-					if (path && !changes.some(c => c.path === path)) {
-						changes.push({ type, path });
+					const status = match[1]! as "M" | "A" | "D";
+					const path = match[2]!.trim();
+					if (path && !seen.has(path)) {
+						seen.add(path);
+						changes.push({ status, path });
+					}
+				}
+			}
+		}
+
+		// 2. `git status --porcelain` — find untracked files (??) missing from git diff
+		const statusOutput = execSync("git status --porcelain", { cwd, encoding: "utf8", timeout: 5000 }).trim();
+		if (statusOutput) {
+			for (const line of statusOutput.split("\n")) {
+				const trimmed = line.trim();
+				if (!trimmed) continue;
+				// "?? path" means untracked/new
+				// Also catch "A  path" for staged new files
+				const match = trimmed.match(/^(\?\?|A\s)\s+(.+)$/);
+				if (match) {
+					const path = match[2]!.trim();
+					if (path && !seen.has(path)) {
+						seen.add(path);
+						changes.push({ status: "A", path });
 					}
 				}
 			}
@@ -297,11 +326,13 @@ function getGitDiffChanges(cwd: string): Array<{ type: "edit" | "new" | "delete"
 	} catch {
 		// Git not available or not a repo — silently skip
 	}
+
 	return changes;
 }
 
 /**
  * Update widget tool list from git diff changes.
+ * Uses git-format status codes (M, A, D) for display consistency.
  * Deduplicates against existing _workflowFileChanges.
  */
 function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): void {
@@ -310,14 +341,19 @@ function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): 
 	for (const change of changes) {
 		if (!seen.has(change.path)) {
 			seen.add(change.path);
+			const type: FileChangeEntry["type"] =
+				change.status === "A" ? "new" :
+				change.status === "D" ? "delete" :
+				"edit";
 			_workflowFileChanges.push({
 				agent: agentName,
 				stepIndex,
-				type: change.type,
+				type,
 				filePath: change.path,
 				timestamp: new Date().toISOString(),
 			});
-			addWidgetSubStepTool(stepIndex, agentName, `${change.type}: ${change.path}`);
+			// Use git-style format for display: "M   path", "A   path", "D   path"
+			addWidgetSubStepTool(stepIndex, agentName, `${change.status}   ${change.path}`);
 			_widgetExtraToolCount++;
 		}
 	}
@@ -601,11 +637,31 @@ function addWidgetSubStepTool(stepIndex: number, agentName: string, tool: string
 		if (sub.tools.length > 20) sub.tools = sub.tools.slice(-20); // keep last 20
 
 		// Also track as file change for checkpoint
-		const toolMatch = tool.match(/^(edit|new|delete|read):\s*(.+)/i);
-		if (toolMatch) {
-			const changeType = toolMatch[1]!.toLowerCase() as FileChangeEntry["type"];
-			const filePath = toolMatch[2]!.trim();
-			// Deduplicate
+		// Support both old format ("edit: path") and new git-format ("M   path", "A   path", "D   path")
+		const oldMatch = tool.match(/^(edit|new|delete|read):\s*(.+)/i);
+		const gitMatch = !oldMatch ? tool.match(/^([MAD])\s{2,}(.+)$/) : null;
+		if (oldMatch) {
+			const changeType = oldMatch[1]!.toLowerCase() as FileChangeEntry["type"];
+			const filePath = oldMatch[2]!.trim();
+			const exists = _workflowFileChanges.some(
+				c => c.filePath === filePath && c.type === changeType && c.stepIndex === stepIndex && c.agent === agentName,
+			);
+			if (!exists && filePath.length > 3) {
+				_workflowFileChanges.push({
+					agent: agentName,
+					stepIndex,
+					type: changeType,
+					filePath,
+					timestamp: new Date().toISOString(),
+				});
+			}
+		} else if (gitMatch) {
+			const gitStatus = gitMatch[1]!;
+			const changeType: FileChangeEntry["type"] =
+				gitStatus === "A" ? "new" :
+				gitStatus === "D" ? "delete" :
+				"edit";
+			const filePath = gitMatch[2]!.trim();
 			const exists = _workflowFileChanges.some(
 				c => c.filePath === filePath && c.type === changeType && c.stepIndex === stepIndex && c.agent === agentName,
 			);
@@ -750,6 +806,9 @@ async function runAgentWithProgress(
 	}
 
 	// Parse progress messages for tool calls and outputs
+	// NOTE: In-progress parsing is best-effort and intentionally conservative.
+	// Final file change detection relies on git diff --name-status (see updateToolsFromGit below)
+	// which is 100% accurate and free of AI text noise.
 	const result = await spawnSubagent(agent, task, _workflowCwd, signal, timeoutMs, (progress) => {
 		// Try to parse tool calls from progress messages
 		// Only match if it looks like a file path (contains a dot or path separator)
@@ -763,12 +822,11 @@ async function runAgentWithProgress(
 				_widgetExtraToolCount++;
 			}
 		}
-		// Detect output file paths — strict filtering, avoid AI text noise
-		const outputMatch = progress.match(/output:\s*((?:pi-dev-output\/)?[^\s,;)\]}]{5,}\.[a-z0-9]{1,5})/i);
+		// Detect output file paths — ONLY match explicit pi-dev-output paths, never free-form text
+		const outputMatch = progress.match(/pi-dev-output\/[^\s,;)\]}]{5,}\.\w+/i);
 		if (outputMatch) {
-			const pathCandidate = outputMatch[1]!;
-			// Only accept real-looking file paths (not random AI substrings like "output::0.00004508")
-			if (pathCandidate.length > 5 && pathCandidate.length < 300 && !pathCandidate.includes("::")) {
+			const pathCandidate = outputMatch[0]!.trim();
+			if (pathCandidate.length > 15 && pathCandidate.length < 300) {
 				addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
 			}
 		}
@@ -874,24 +932,24 @@ async function runAgentWithProgress(
 	}
 
 	// Find output file paths (pi-dev-output, review reports, plan files)
+	// NOTE: Only match explicit paths in pi-dev-output/ or known review/plan file patterns.
+	// The old pattern matching loose "output:" text was the root cause of "output::0.00004508" noise.
+	// File change detection now relies on git diff --name-status (updateToolsFromGit below),
+	// which is deterministic and noise-free.
 	const outputPathPatterns = [
-		// Save to path: "save to pi-dev-output/pi-plans/xxx.md"
-		/(?:output|保存|save|写入|write)\s*(?:到|至|to|:)?\s*["']?([^"'\n]+\.[a-zA-Z0-9_]+)["']?/gi,
-		// Direct reference to pi-dev-output paths
-		/pi-dev-output\/[^"'\s,)+]+/g,
-		// Review file patterns
+		// Direct reference to pi-dev-output paths: "pi-dev-output/pi-plans/xxx.md"
+		/pi-dev-output\/[a-zA-Z0-9_\/-]+\.[a-zA-Z0-9]+/g,
+		// Review file patterns: "review-20260520-162800.md"
 		/review-\d{8}-\d{6}\.md/g,
+		// Plan file patterns: "20260520-1628-*.md"
+		/\d{8}-\d{4,6}-[a-zA-Z0-9_-]+\.md/g,
 	];
 	const seenOutputs = new Set<string>();
 	for (const pattern of outputPathPatterns) {
 		let m;
 		while ((m = pattern.exec(searchText)) !== null) {
-			let path_ = m[0]!.trim().replace(/["']/g, "");
-			// If first group captured, use it (the cleaned path)
-			if (m[1] && m[1].length > 3) {
-				path_ = m[1]!.trim().replace(/["']/g, "");
-			}
-			if (path_.length > 5 && path_.length < 300 && !seenOutputs.has(path_)) {
+			const path_ = m[0]!.trim();
+			if (path_.length > 10 && path_.length < 300 && !seenOutputs.has(path_)) {
 				seenOutputs.add(path_);
 				addWidgetSubStepOutput(stepIndex, agentName, path_);
 			}

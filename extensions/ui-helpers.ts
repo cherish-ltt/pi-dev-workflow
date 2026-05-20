@@ -635,23 +635,37 @@ function extractFileChanges(steps: WorkflowStepWidgetState[]): {
     for (const s of steps) {
         if (!s.subSteps) continue;
         for (const sub of s.subSteps) {
-            // Check tools for edit/new/delete patterns
+            // Check tools for file change patterns.
+            // Supports both old format ("edit: path", "new: path", "delete: path")
+            // and new git-format ("M   path", "A   path", "D   path") from updateToolsFromGit.
             if (sub.tools) {
                 for (const tool of sub.tools) {
-                    const editMatch = tool.match(/^edit:\s*(.+)/i);
-                    const newMatch = tool.match(/^new:\s*(.+)/i);
-                    const delMatch = tool.match(/^delete:\s*(.+)/i);
-                    if (editMatch && !editFiles.includes(editMatch[1]!)) {
-                        const fp = editMatch[1]!.trim();
+                    // Old format: "edit: path", "new: path", "delete: path"
+                    const oldEdit = tool.match(/^edit:\s*(.+)/i);
+                    const oldNew = tool.match(/^new:\s*(.+)/i);
+                    const oldDel = tool.match(/^delete:\s*(.+)/i);
+                    // New git-format: "M   path", "A   path", "D   path"
+                    const gitFormat = tool.match(/^([MAD])\s{2,}(.+)$/);
+
+                    if (oldEdit) {
+                        const fp = oldEdit[1]!.trim();
                         if (!editFiles.includes(fp)) editFiles.push(fp);
-                    }
-                    if (newMatch && !newFiles.includes(newMatch[1]!)) {
-                        const fp = newMatch[1]!.trim();
+                    } else if (oldNew) {
+                        const fp = oldNew[1]!.trim();
                         if (!newFiles.includes(fp)) newFiles.push(fp);
-                    }
-                    if (delMatch && !delFiles.includes(delMatch[1]!)) {
-                        const fp = delMatch[1]!.trim();
+                    } else if (oldDel) {
+                        const fp = oldDel[1]!.trim();
                         if (!delFiles.includes(fp)) delFiles.push(fp);
+                    } else if (gitFormat) {
+                        const status = gitFormat[1]!;
+                        const fp = gitFormat[2]!.trim();
+                        if (status === "M" && !editFiles.includes(fp)) {
+                            editFiles.push(fp);
+                        } else if (status === "A" && !newFiles.includes(fp)) {
+                            newFiles.push(fp);
+                        } else if (status === "D" && !delFiles.includes(fp)) {
+                            delFiles.push(fp);
+                        }
                     }
                 }
             }
@@ -675,88 +689,97 @@ function extractFileChanges(steps: WorkflowStepWidgetState[]): {
         }
     }
 
-    // Build directory tree from all files
-    const allFiles = [
-        ...editFiles.map((f) => ({ path: f, type: "edit" as const })),
-        ...newFiles.map((f) => ({ path: f, type: "new" as const })),
-        ...delFiles.map((f) => ({ path: f, type: "delete" as const })),
-        ...outputFiles.map((f) => ({ path: f, type: "new" as const })),
-    ];
-
-    // Organize by directory
-    const dirTree = new Map<string, string[]>();
-    for (const f of allFiles) {
-        // Normalize path — ensure consistent structure
-        let normalizedPath = f.path;
-        const dir = normalizedPath.includes("/") ? normalizedPath.substring(0, normalizedPath.lastIndexOf("/")) : ".";
-        if (!dirTree.has(dir)) dirTree.set(dir, []);
-        if (!dirTree.get(dir)!.includes(normalizedPath)) {
-            dirTree.get(dir)!.push(normalizedPath);
-        }
+    // ── Merge all file paths, deduplicate ─────────────────────
+    const allPaths = new Map<string, "edit" | "new" | "delete" | "output">();
+    for (const fp of editFiles) allPaths.set(fp, "edit");
+    for (const fp of newFiles) allPaths.set(fp, "new");
+    for (const fp of delFiles) allPaths.set(fp, "delete");
+    for (const fp of outputFiles) {
+        if (!allPaths.has(fp)) allPaths.set(fp, "output");
     }
 
-    // Format as tree
-    const treeLines: string[] = [];
-    const sortedDirs = [...dirTree.keys()].sort();
-    for (let di = 0; di < sortedDirs.length; di++) {
-        const dir = sortedDirs[di]!;
-        const files = dirTree.get(dir)!.sort();
-        const dirPrefix = di === sortedDirs.length - 1 ? "└── " : "├── ";
-        const childPrefix = di === sortedDirs.length - 1 ? "    " : "│   ";
-        treeLines.push(`${dirPrefix}${dir}`);
-        for (let fi = 0; fi < files.length; fi++) {
-            const isLastFile = fi === files.length - 1;
-            const fPrefix = isLastFile ? "└── " : "├── ";
-            const fileName = files[fi]!.includes("/") ? files[fi]!.substring(files[fi]!.lastIndexOf("/") + 1) : files[fi]!;
-            treeLines.push(`${childPrefix}${fPrefix}${fileName}`);
-        }
+    // ── Build multi-level tree ────────────────────────────────
+    interface TreeNode {
+        name: string;
+        children: Map<string, TreeNode>;
+        isFile: boolean;
     }
 
-    // Deduplicate: output files may overlap with new/edit files
-    const outputOnlyFiles = outputFiles.filter((f) => !editFiles.includes(f) && !newFiles.includes(f));
-
-    // If no files found from tools but we have outputs, rebuild tree with those
-    if (editFiles.length === 0 && newFiles.length === 0 && outputOnlyFiles.length > 0) {
-        // Rebuild tree with only output files
-        dirTree.clear();
-        for (const f of outputOnlyFiles) {
-            const dir = f.includes("/") ? f.substring(0, f.lastIndexOf("/")) : ".";
-            if (!dirTree.has(dir)) dirTree.set(dir, []);
-            if (!dirTree.get(dir)!.includes(f)) dirTree.get(dir)!.push(f);
-        }
-        const newTreeLines: string[] = [];
-        const sortedDirs2 = [...dirTree.keys()].sort();
-        for (let di = 0; di < sortedDirs2.length; di++) {
-            const dir = sortedDirs2[di]!;
-            const files = dirTree.get(dir)!.sort();
-            const dirPrefix = di === sortedDirs2.length - 1 ? "└── " : "├── ";
-            const childPrefix = di === sortedDirs2.length - 1 ? "    " : "│   ";
-            newTreeLines.push(`${dirPrefix}${dir}`);
-            for (let fi = 0; fi < files.length; fi++) {
-                const isLastFile = fi === files.length - 1;
-                const fPrefix = isLastFile ? "└── " : "├── ";
-                const fileName = files[fi]!.includes("/")
-                    ? files[fi]!.substring(files[fi]!.lastIndexOf("/") + 1)
-                    : files[fi]!;
-                newTreeLines.push(`${childPrefix}${fPrefix}${fileName}`);
+    function buildTree(paths: Iterable<string>): TreeNode {
+        const root: TreeNode = { name: "", children: new Map(), isFile: false };
+        for (const filePath of paths) {
+            const parts = filePath.split("/");
+            let current = root;
+            for (let i = 0; i < parts.length; i++) {
+                const part = parts[i]!;
+                const isLast = i === parts.length - 1;
+                let child = current.children.get(part);
+                if (!child) {
+                    child = { name: part, children: new Map(), isFile: false };
+                    current.children.set(part, child);
+                }
+                current = child;
+                if (isLast) current.isFile = true;
             }
         }
-        return {
-            edits: 0,
-            news: outputOnlyFiles.length,
-            deletes: 0,
-            treeText: newTreeLines.join("\n"),
-        };
+        return root;
     }
 
-    if (treeLines.length === 0) {
+    function renderTreeNode(
+        node: TreeNode,
+        prefix: string,
+        isLast: boolean,
+        lines: string[],
+    ): void {
+        const connector = isLast ? "└── " : "├── ";
+        lines.push(`${prefix}${connector}${node.name}`);
+        renderChildren(node, prefix + (isLast ? "    " : "│   "), lines);
+    }
+
+    function renderChildren(
+        node: TreeNode,
+        prefix: string,
+        lines: string[],
+    ): void {
+        const entries = [...node.children.entries()].sort((a, b) => {
+            // Directories before files, then alphabetical
+            if (a[1].isFile !== b[1].isFile) return a[1].isFile ? 1 : -1;
+            return a[0].localeCompare(b[0]);
+        });
+        for (let i = 0; i < entries.length; i++) {
+            const [, child] = entries[i]!;
+            const isLastChild = i === entries.length - 1;
+            if (child.children.size > 0 && !child.isFile) {
+                // Directory node (has children, not marked as file)
+                renderTreeNode(child, prefix, isLastChild, lines);
+            } else {
+                // Leaf node (file or empty directory)
+                const connector = isLastChild ? "└── " : "├── ";
+                lines.push(`${prefix}${connector}${child.name}`);
+            }
+        }
+    }
+
+    const tree = buildTree(allPaths.keys());
+    const treeLines: string[] = [];
+    if (tree.children.size > 0) {
+        renderChildren(tree, "", treeLines);
+    } else {
         treeLines.push("(无文件变更)");
     }
 
+    // ── Count by type ─────────────────────────────────────────
+    let edits = 0, news = 0, deletes = 0;
+    for (const [fp, type] of allPaths) {
+        if (type === "edit") edits++;
+        else if (type === "new" || type === "output") news++;
+        else if (type === "delete") deletes++;
+    }
+
     return {
-        edits: editFiles.length,
-        news: newFiles.length + (treeLines.length > 0 ? outputOnlyFiles.filter((f) => !newFiles.includes(f)).length : 0),
-        deletes: delFiles.length,
+        edits,
+        news,
+        deletes,
         treeText: treeLines.join("\n"),
     };
 }
