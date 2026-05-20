@@ -605,6 +605,7 @@ let _workflowRunning = false;
 
 function refreshWidget(): void {
 	if (!_lastWorkflowCtx) return;
+	const taskSummary = extractTaskSummary(_workflowPrompt);
 	const widgetState = buildWidgetState(
 		_widgetMode,
 		_widgetSteps,
@@ -615,6 +616,7 @@ function refreshWidget(): void {
 			_widgetSteps.every(s => s.status === "done" || s.status === "skipped") ? "done" :
 			"running",
 		{ toolCount: _widgetExtraToolCount, tokenCount: _widgetExtraTokenCount },
+		taskSummary,
 	);
 	updateWorkflowWidget(_lastWorkflowCtx, widgetState);
 }
@@ -1324,6 +1326,7 @@ async function executeWorkflowBackground(
 	archiveCheckpointFile(_workflowCwd, planFileRelPathInner);
 
 	// Send persistent result
+	const taskSummary = extractTaskSummary(prompt);
 	const finalState = buildWidgetState(
 		mode,
 		_widgetSteps,
@@ -1331,6 +1334,7 @@ async function executeWorkflowBackground(
 		_widgetStartTime,
 		stepStates.every(s => s.status === "done" || s.status === "skipped") ? "done" : "failed",
 		{ toolCount: _widgetExtraToolCount, tokenCount: _widgetExtraTokenCount },
+		taskSummary,
 	);
 	sendWorkflowResult(pi, finalState, prompt, _workflowType);
 
@@ -1509,6 +1513,7 @@ export async function runWorkflow(
 				_widgetCurrentIdx,
 				_widgetStartTime,
 				"cancelled",
+				extractTaskSummary(_workflowPrompt),
 			);
 			updateWorkflowWidget(_lastWorkflowCtx, finalState);
 

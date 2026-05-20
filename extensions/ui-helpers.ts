@@ -270,6 +270,8 @@ export interface WorkflowWidgetState {
     toolCount?: number;
     tokenCount?: number;
     updatedAt: string;
+    /** Human-readable task summary shown in widget header, e.g. "[feat - 在 auth 中实现登录]" */
+    taskSummary?: string;
 }
 
 // ── Widget component builder ─────────────────────────────────
@@ -335,6 +337,11 @@ function formatTimeout(ms: number): string {
 function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: boolean, width: number): string[] {
     const lines: string[] = [];
     const elapsed = Date.now() - state.startedAt;
+
+    // ── Task summary (shown above the main header) ──
+    if (state.taskSummary) {
+        lines.push(` ${dim(theme, state.taskSummary)}`);
+    }
 
     // ── Header ──
     const modeLabel =
@@ -938,6 +945,7 @@ export function buildWidgetState(
     startedAt: number,
     status: WorkflowWidgetState["status"],
     extra?: { toolCount?: number; tokenCount?: number },
+    taskSummary?: string,
 ): WorkflowWidgetState {
     return {
         mode,
@@ -948,6 +956,7 @@ export function buildWidgetState(
         updatedAt: new Date().toISOString(),
         toolCount: extra?.toolCount,
         tokenCount: extra?.tokenCount,
+        taskSummary,
     };
 }
 
