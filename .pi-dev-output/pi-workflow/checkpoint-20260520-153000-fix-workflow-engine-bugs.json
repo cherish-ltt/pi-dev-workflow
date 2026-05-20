@@ -1,0 +1,108 @@
+{
+  "version": 2,
+  "createdAt": "2026-05-20T08:26:22.641Z",
+  "updatedAt": "2026-05-20T08:26:22.641Z",
+  "prompt": "[fix] 修复 extensions/workflow-engine.ts 1179行的let agentResult = await runAgentWithProgress(loopAgent, loopTask, stepIndex, step.loopAgentName!, step.timeoutMs);和1432行-1435行的    sendWorkflowResult(pi, finalState, prompt, _workflowType);    // Cleanup widget after delay    setTimeout(() => cleanupWidget(), 5000); 中的 1179行：executeLoopGroup 函数在调用 runAgentWithProgress 后没有检查 agentResult.exitCode。如果 sub-agent 进程非正常退出（例如崩溃或报错），工作流会忽略该错误并继续尝试运行 Reviewer。建议检查退出码，并在失败时抛出异常或中断循环。1432行：使用 setTimeout 延迟 5 秒执行 cleanupWidget 存在竞态风险。如果用户在工作流完成后 5 秒内立即启动了一个新的工作流，这个定时器触发时会调用 cleanupWidget 并将全局变量 _workflowRunning 重置为 false，从而干扰甚至中断正在运行的新工作流。建议通过对比工作流启动时间戳或在启动新工作流时显式取消之前的定时器来解决。\n\n**背景**：\n- 输入：见代码上下文\n- 预期行为：修复问题，但不能破坏原因功能结构和其他代码\n- 当前错误：请描述当前错误\n**任务**：\n1. 不要仅仅消除报错（Suppress），要解决根本原因。\n2. 先读取相关代码和日志，诊断根因（多步推理，不要先给结论）。\n3. 提供至少一种修复方案，并说明为什么这样做。\n4. 编写测试用例复现该 Bug 并确认修复有效。\n**输出**：提供 diff 和两句话的根因分析。\n**约束**：只修 bug，不做重构；最小化改动；不要假设错误是微不足道的。\n**验证**：运行 tests通过 确认修复。",
+  "mode": "attended",
+  "steps": [
+    {
+      "status": "done",
+      "durationMs": 279725
+    },
+    {
+      "status": "done",
+      "loopCount": 1,
+      "durationMs": 828233
+    }
+  ],
+  "currentStepIndex": 1,
+  "loopCounts": {
+    "worker-reviewer": 1
+  },
+  "planFilePath": ".pi-dev-output/pi-plans/20260520-153000-fix-workflow-engine-bugs.md",
+  "taskSummary": "fix - 修复 extensions/workflow-engine.ts 1179行的let agentResult = await runAgentWithProgress(loopAgent, loopTask, stepIndex, step.loopAgentName!, step.timeoutMs);和1432行-1435行的    sendWorkflowResult(pi, finalState, prompt, _workflowType);    // Cleanup widget after delay    setTimeout(() => cleanupWidget(), 5000); 中的 1179行：executeLoopGroup 函数在调用 runAgentWithProgress 后没有检查 agentResult.exitCode。如果 sub-agent 进程非正常退出（例如崩溃或报错），工作流会忽略该错误并继续尝试运行 Reviewer。建议检查退出码，并在失败时抛出异常或中断循环。1432行：使用 setTimeout 延迟 5 秒执行 cleanupWidget 存在竞态风险。如果用户在工作流完成后 5 秒内立即启动了一个新的工作流，这个定时器触发时会调用 cleanupWidget 并将全局变量 _workflowRunning 重置为 false，从而干扰甚至中断正在运行的新工作流。建议通过对比工作流启动时间戳或在启动新工作流时显式取消之前的定时器来解决。",
+  "workflowType": "自定义",
+  "fileChanges": [
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "type": "edit",
+      "filePath": ".gitignore",
+      "timestamp": "2026-05-20T08:11:38.329Z"
+    },
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "type": "new",
+      "filePath": ".pi-dev-output/",
+      "timestamp": "2026-05-20T08:11:38.342Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "extensions/workflow-engine.ts",
+      "timestamp": "2026-05-20T08:24:02.896Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "tests/test-workflow-engine-bugs.mjs",
+      "timestamp": "2026-05-20T08:24:02.897Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "extensions/workflow-engine.ts",
+      "timestamp": "2026-05-20T08:26:22.616Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "tests/test-workflow-engine-bugs.mjs",
+      "timestamp": "2026-05-20T08:26:22.616Z"
+    }
+  ],
+  "subAgentRuns": 3,
+  "filesModified": 5,
+  "filesCreated": 1,
+  "agentRunHistory": [
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "startedAt": "2026-05-20T08:06:58.619Z",
+      "durationMs": 279685,
+      "exitCode": 0,
+      "toolCount": 0
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "startedAt": "2026-05-20T08:12:34.409Z",
+      "durationMs": 688481,
+      "exitCode": 0,
+      "toolCount": 2
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "startedAt": "2026-05-20T08:24:02.928Z",
+      "durationMs": 139684,
+      "exitCode": 0,
+      "toolCount": 4
+    }
+  ],
+  "baseline": [
+    {
+      "path": "extensions/workflow-engine.ts",
+      "hash": "7f0ec6eb9a91d57dd31335c360a910da53c3b1ea"
+    },
+    {
+      "path": "package.json",
+      "hash": "fa8ac6dec6894988cbe6393b8c71f9d20c5188cd"
+    }
+  ]
+}

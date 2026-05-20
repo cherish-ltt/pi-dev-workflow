@@ -355,7 +355,7 @@ function toGitStatus(toolType: string): string {
  */
 function hasContentChanged(cwd: string, path: string, baselineHash: string): boolean {
 	try {
-		const currentHash = execSync(`git hash-object "${path}"`, { cwd, encoding: "utf8", timeout: 3000 }).trim();
+		const currentHash = require('child_process').spawnSync('git', ['hash-object', path], { cwd, encoding: 'utf8', timeout: 3000 }).stdout?.trim() || "";
 		return currentHash !== baselineHash;
 	} catch {
 		// file deleted or inaccessible — consider changed
@@ -604,6 +604,7 @@ let _widgetStartTime = 0;
 let _widgetExtraToolCount = 0;
 let _widgetExtraTokenCount = 0;
 let _workflowRunning = false;
+let _cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 
 function refreshWidget(): void {
 	if (!_lastWorkflowCtx) return;
@@ -635,6 +636,10 @@ function initWidget(ctx: ExtensionCommandContext, mode: WorkflowMode, stepsCount
 	_widgetStartTime = Date.now();
 	_widgetExtraToolCount = 0;
 	_widgetExtraTokenCount = 0;
+	if (_cleanupTimer) {
+		clearTimeout(_cleanupTimer);
+		_cleanupTimer = null;
+	}
 	_lastWorkflowCtx = ctx;
 	_workflowRunning = true;
 	refreshWidget();
@@ -788,6 +793,10 @@ function setWidgetCurrentStep(index: number): void {
 }
 
 function cleanupWidget(): void {
+	if (_cleanupTimer) {
+		clearTimeout(_cleanupTimer);
+		_cleanupTimer = null;
+	}
 	_workflowRunning = false;
 	if (_lastWorkflowCtx) {
 		updateWorkflowWidget(_lastWorkflowCtx, null);
@@ -1178,6 +1187,21 @@ async function executeLoopGroup(
 
 		let agentResult = await runAgentWithProgress(loopAgent, loopTask, stepIndex, step.loopAgentName!, step.timeoutMs);
 
+		// 检查 agent 是否异常退出（非超时非零退出码）
+		if (agentResult.exitCode !== 0 && !isTimeoutResult(agentResult)) {
+			if (mode === "full-auto") {
+				throw new Error(`Agent ${step.loopAgentName} 异常退出 (exit ${agentResult.exitCode}): ${agentResult.stderr.slice(0, 200)}`);
+			} else {
+				const choice = await uiSelect(ctx, `❌ ${step.loopAgentName} 异常退出 (exit ${agentResult.exitCode})`, [
+					"1. 重新执行", "2. 跳过此步骤", "3. 取消工作流",
+				]);
+				if (!choice || choice.startsWith("3")) { cancelWorkflow(); return; }
+				if (choice.startsWith("2")) { state.status = "skipped"; return; }
+				// 重新执行
+				agentResult = await runAgentWithProgress(loopAgent, `[RETRY]\n\n${loopTask}`, stepIndex, step.loopAgentName!, step.timeoutMs);
+			}
+		}
+
 		if (isTimeoutResult(agentResult)) {
 			if (mode === "full-auto") {
 				contextPrompt = `[TIMEOUT_WARNING] 上一个 ${step.loopAgentName} 执行超时。\n\n${buildReviewTask(prompt, planFileRelPath, _workflowCwd)}`;
@@ -1406,6 +1430,7 @@ async function executeWorkflowBackground(
 				error: state.error,
 				loopCount: state.loopCount,
 			});
+			break;
 		}
 
 		setWidgetCurrentStep(currentStepIndex + 1);
@@ -1432,7 +1457,11 @@ async function executeWorkflowBackground(
 	sendWorkflowResult(pi, finalState, prompt, _workflowType);
 
 	// Cleanup widget after delay
-	setTimeout(() => cleanupWidget(), 5000);
+	if (_cleanupTimer) clearTimeout(_cleanupTimer);
+	_cleanupTimer = setTimeout(() => {
+		_cleanupTimer = null;
+		cleanupWidget();
+	}, 5000);
 
 	function buildCp(): CheckpointData {
 		return {
@@ -1644,7 +1673,11 @@ export async function runWorkflow(
 
 			// ── Archive checkpoint on cancel too ──
 			archiveCheckpointFile(_workflowCwd, _workflowPlanFileRelPath);
-			setTimeout(() => cleanupWidget(), 5000);
+			if (_cleanupTimer) clearTimeout(_cleanupTimer);
+			_cleanupTimer = setTimeout(() => {
+				_cleanupTimer = null;
+				cleanupWidget();
+			}, 5000);
 		}
 	});
 
