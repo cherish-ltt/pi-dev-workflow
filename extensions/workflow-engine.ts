@@ -79,6 +79,15 @@ interface AgentRunEntry {
 	toolCount: number;
 }
 
+/**
+ * Baseline entry: records the git object hash of a file at workflow start.
+ * Used to distinguish pre-existing dirty files from workflow-generated changes.
+ */
+interface BaselineEntry {
+	path: string;
+	hash: string;
+}
+
 interface CheckpointData {
 	version: 2;
 	createdAt: string;
@@ -97,6 +106,8 @@ interface CheckpointData {
 	filesModified?: number;
 	filesCreated?: number;
 	agentRunHistory?: AgentRunEntry[];
+	/** Baseline snapshot taken at workflow start for accurate change tracking. */
+	baseline?: BaselineEntry[];
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -331,31 +342,102 @@ function getGitDiffChanges(cwd: string): GitFileChange[] {
 }
 
 /**
- * Update widget tool list from git diff changes.
+ * Convert an internal tool type ("edit"/"new"/"delete") to a git status letter ("M"/"A"/"D").
+ * Used to unify all tool entries to git-format display: "M   path", "A   path", "D   path".
+ */
+function toGitStatus(toolType: string): string {
+	switch (toolType.toLowerCase()) {
+		case "new": case "write": case "create": case "add": case "created": case "added":
+			return "A";
+		case "delete": case "remove": case "deleted": case "removed":
+			return "D";
+		default:
+			return "M";
+	}
+}
+
+/**
+ * Check whether a file's current content hash differs from its baseline.
+ * Returns true if the hash changed or the file is no longer accessible.
+ */
+function hasContentChanged(cwd: string, path: string, baselineHash: string): boolean {
+	try {
+		const currentHash = execSync(`git hash-object "${path}"`, { cwd, encoding: "utf8", timeout: 3000 }).trim();
+		return currentHash !== baselineHash;
+	} catch {
+		// file deleted or inaccessible — consider changed
+		return true;
+	}
+}
+
+/**
+ * Capture baseline snapshot of all dirty files at workflow start.
+ * Records git object hashes so we can later distinguish pre-existing
+ * changes from workflow-generated ones.
+ */
+function captureBaseline(cwd: string): void {
+	_workflowBaseline = [];
+	try {
+		const changes = getGitDiffChanges(cwd);
+		for (const change of changes) {
+			let hash = "";
+			try {
+				hash = execSync(`git hash-object "${change.path}"`, { cwd, encoding: "utf8", timeout: 3000 }).trim();
+			} catch {
+				// file might not exist (deleted in diff)
+			}
+			_workflowBaseline.push({ path: change.path, hash });
+		}
+	} catch {
+		// git not available or not a repo
+	}
+}
+
+/**
+ * Update widget tool list from git diff changes, filtered against the baseline.
+ * Only reports changes that are genuinely new or modified BY the workflow,
+ * not pre-existing dirty files that the workflow didn't touch.
+ *
  * Uses git-format status codes (M, A, D) for display consistency.
  * Deduplicates against existing _workflowFileChanges.
  */
 function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): void {
-	const changes = getGitDiffChanges(cwd);
+	const currentChanges = getGitDiffChanges(cwd);
 	const seen = new Set(_workflowFileChanges.map(c => c.filePath));
-	for (const change of changes) {
-		if (!seen.has(change.path)) {
-			seen.add(change.path);
-			const type: FileChangeEntry["type"] =
-				change.status === "A" ? "new" :
-				change.status === "D" ? "delete" :
-				"edit";
-			_workflowFileChanges.push({
-				agent: agentName,
-				stepIndex,
-				type,
-				filePath: change.path,
-				timestamp: new Date().toISOString(),
-			});
-			// Use git-style format for display: "M   path", "A   path", "D   path"
-			addWidgetSubStepTool(stepIndex, agentName, `${change.status}   ${change.path}`);
-			_widgetExtraToolCount++;
+
+	for (const change of currentChanges) {
+		if (seen.has(change.path)) continue;
+
+		// ── Baseline filtering ──────────────────────────────
+		// Skip files that were already dirty at workflow start and haven't been touched.
+		if (_workflowBaseline.length > 0) {
+			const baselineEntry = _workflowBaseline.find(b => b.path === change.path);
+			if (baselineEntry) {
+				if (!hasContentChanged(cwd, change.path, baselineEntry.hash)) {
+					// Pre-existing dirty file, content unchanged — workflow didn't touch it
+					continue;
+				}
+				// Content changed → workflow modified it, report as new change
+				// (Remove old baseline entry so next git diff sees it as workflow-owned)
+				_workflowBaseline = _workflowBaseline.filter(b => b.path !== change.path);
+			}
 		}
+
+		seen.add(change.path);
+		const type: FileChangeEntry["type"] =
+			change.status === "A" ? "new" :
+			change.status === "D" ? "delete" :
+			"edit";
+		_workflowFileChanges.push({
+			agent: agentName,
+			stepIndex,
+			type,
+			filePath: change.path,
+			timestamp: new Date().toISOString(),
+		});
+		// Use git-style format for display: "M   path", "A   path", "D   path"
+		addWidgetSubStepTool(stepIndex, agentName, `${change.status}   ${change.path}`);
+		_widgetExtraToolCount++;
 	}
 }
 // ═══════════════════════════════════════════════════════════════
@@ -519,6 +601,8 @@ let _workflowFileChanges: FileChangeEntry[] = [];
 let _workflowAgentRunHistory: AgentRunEntry[] = [];
 /** Store step defs for pre-populating sub-steps */
 let _workflowStepDefs: WorkflowStepDef[] = [];
+/** Baseline snapshot: git hashes of dirty files at workflow start */
+let _workflowBaseline: BaselineEntry[] = [];
 
 let _widgetMode: WorkflowMode = "attended";
 let _widgetSteps: WorkflowStepWidgetState[] = [];
@@ -818,7 +902,8 @@ async function runAgentWithProgress(
 			const target = toolMatch[2]!;
 			// Only classify as file operation if it's a file path-like string
 			if (target.includes(".") || target.includes("/") || target.includes("\\")) {
-				addWidgetSubStepTool(stepIndex, agentName, `${toolType}: ${target}`);
+				const gitStatus = toGitStatus(toolType);
+				addWidgetSubStepTool(stepIndex, agentName, `${gitStatus}   ${target}`);
 				_widgetExtraToolCount++;
 			}
 		}
@@ -882,7 +967,7 @@ async function runAgentWithProgress(
 
 				seenTools.add(filePath);
 				const fullMatch = m[0]!.toLowerCase();
-				// Determine operation type
+				// Determine operation type and convert to git status
 				let toolType = "edit";
 				if (fullMatch.includes("write") || fullMatch.includes("创建") || fullMatch.includes("new") || fullMatch.includes("add") || fullMatch.includes("created") || fullMatch.includes("added")) {
 					toolType = "new";
@@ -891,8 +976,11 @@ async function runAgentWithProgress(
 				} else if (fullMatch.includes("read") || fullMatch.includes("读取")) {
 					toolType = "read";
 				}
-				addWidgetSubStepTool(stepIndex, agentName, `${toolType}: ${filePath}`);
-				_widgetExtraToolCount++;
+				if (toolType !== "read") {
+					const gitStatus = toGitStatus(toolType);
+					addWidgetSubStepTool(stepIndex, agentName, `${gitStatus}   ${filePath}`);
+					_widgetExtraToolCount++;
+				}
 			}
 		}
 	}
@@ -913,7 +1001,7 @@ async function runAgentWithProgress(
 						const fp = args.file_path.trim();
 						if (!seenTools.has(fp)) {
 							seenTools.add(fp);
-							addWidgetSubStepTool(stepIndex, agentName, `new: ${fp}`);
+							addWidgetSubStepTool(stepIndex, agentName, `A   ${fp}`);
 							_widgetExtraToolCount++;
 						}
 					}
@@ -922,7 +1010,7 @@ async function runAgentWithProgress(
 						const fp = args.file_path.trim();
 						if (!seenTools.has(fp)) {
 							seenTools.add(fp);
-							addWidgetSubStepTool(stepIndex, agentName, `edit: ${fp}`);
+							addWidgetSubStepTool(stepIndex, agentName, `M   ${fp}`);
 							_widgetExtraToolCount++;
 						}
 					}
@@ -1276,6 +1364,7 @@ async function executeWorkflowBackground(
 			filesModified: _workflowFileChanges.filter(c => c.type === "edit").length,
 			filesCreated: _workflowFileChanges.filter(c => c.type === "new").length,
 			agentRunHistory: [..._workflowAgentRunHistory],
+			baseline: _workflowBaseline,
 		};
 	}
 }
@@ -1378,6 +1467,13 @@ export async function runWorkflow(
 	_workflowFileChanges = existingCp?.fileChanges ? [...existingCp.fileChanges] : [];
 	_workflowAgentRunHistory = existingCp?.agentRunHistory ? [...existingCp.agentRunHistory] : [];
 
+	// ── Baseline snapshot: restore from checkpoint or capture fresh ──
+	if (resumeFlow && existingCp?.baseline) {
+		_workflowBaseline = [...existingCp.baseline];
+	} else if (!resumeFlow) {
+		captureBaseline(ctx.cwd);
+	}
+
 	saveCheckpoint(ctx.cwd, {
 		version: 2,
 		createdAt: existingCp?.createdAt ?? new Date().toISOString(),
@@ -1395,6 +1491,7 @@ export async function runWorkflow(
 		filesModified: _workflowFileChanges.filter(c => c.type === "edit").length,
 		filesCreated: _workflowFileChanges.filter(c => c.type === "new").length,
 		agentRunHistory: [..._workflowAgentRunHistory],
+		baseline: _workflowBaseline,
 	});
 
 	// Initialize widget
@@ -1447,6 +1544,7 @@ export async function runWorkflow(
 				filesModified: _workflowFileChanges.filter(c => c.type === "edit").length,
 				filesCreated: _workflowFileChanges.filter(c => c.type === "new").length,
 				agentRunHistory: [..._workflowAgentRunHistory],
+				baseline: _workflowBaseline,
 			};
 			saveCheckpoint(_workflowCwd, cancelCp);
 
