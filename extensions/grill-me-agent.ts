@@ -3,7 +3,7 @@
  *
  * 职责：
  *   1. runGrillPhase()  — 启动 sub-agent 生成评审问题，TUI 逐题呈现（选项 + 自定义输入）
- *   2. runPRDPhase()    — 启动 sub-agent 生成 PRD，保存到 pi-dev-output/pi-prd/
+ *   2. runPRDPhase()    — 启动 sub-agent 生成 PRD，保存到 .pi-dev-output/pi-prd/
  *
  * 关键设计决策（修复 #2）：
  *   sub-agent 通过 `write` 工具将评审问题写入临时文件，主进程事后读取。
@@ -23,6 +23,7 @@ import {
 	Spacer,
 	type SelectItem,
 } from "@earendil-works/pi-tui";
+import { uiSelect, uiConfirm, uiInput } from "./ui-helpers";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -53,51 +54,56 @@ export interface PRDResult {
 
 // ── Output dirs ──────────────────────────────────────────────
 
-const DEV_OUTPUT_DIR = "pi-dev-output";
+const DEV_OUTPUT_DIR = ".pi-dev-output";
 const GRILL_DIRNAME = "pi-grill";
+const GRILL_ANSWERS_DIRNAME = "answers";
+const GRILL_QUESTIONS_DIRNAME = "questions";
 const PRD_DIRNAME = "pi-prd";
 
-/** Ensure an output subdirectory exists and write .gitignore. */
+/** Ensure an output subdirectory exists. */
 function ensureOutputDir(cwd: string, subdir: string): string {
 	const dir = path.join(cwd, DEV_OUTPUT_DIR, subdir);
 	fs.mkdirSync(dir, { recursive: true });
-	const gitignorePath = path.join(cwd, DEV_OUTPUT_DIR, ".gitignore");
-	try {
-		const existing = fs.readFileSync(gitignorePath, "utf-8").trim();
-		if (!existing.includes("*")) {
-			fs.writeFileSync(gitignorePath, "*\n!.gitignore\n");
-		}
-	} catch {
-		fs.writeFileSync(gitignorePath, "*\n!.gitignore\n");
-	}
 	return dir;
 }
 
-/** Generate a safe temp filename for grill output. */
+/** Format current time as YYYYMMDD-HHmm for human-readable timestamps. */
+function formatTimestamp(): string {
+	const now = new Date();
+	const Y = now.getFullYear().toString();
+	const M = (now.getMonth() + 1).toString().padStart(2, "0");
+	const D = now.getDate().toString().padStart(2, "0");
+	const h = now.getHours().toString().padStart(2, "0");
+	const m = now.getMinutes().toString().padStart(2, "0");
+	return `${Y}${M}${D}-${h}${m}`;
+}
+
+/** Generate a safe temp filename for grill output (pi-grill/questions/questions-<id>-<YYYYMMDD-HHmm>.json). */
 function grillOutputPath(cwd: string): string {
-	const dir = ensureOutputDir(cwd, GRILL_DIRNAME);
+	const dir = ensureOutputDir(cwd, path.join(GRILL_DIRNAME, GRILL_QUESTIONS_DIRNAME));
 	const ts = Date.now().toString(36);
-	return path.join(dir, `questions-${ts}.json`);
+	return path.join(dir, `questions-${ts}-${formatTimestamp()}.json`);
 }
 
 /**
- * Save the final assembled prompt to a timestamped answer file.
+ * Save the final assembled prompt to a timestamped answer file (pi-grill/answers/answer-<id>-<YYYYMMDD-HHmm>.md).
  * Returns the relative path from cwd (for display in notifications).
  */
 export function saveAnswerFile(cwd: string, content: string): string {
-	const dir = ensureOutputDir(cwd, GRILL_DIRNAME);
+	const dir = ensureOutputDir(cwd, path.join(GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME));
 	const ts = Date.now().toString(36);
-	const filename = `answer-${ts}.md`;
+	const filename = `answer-${ts}-${formatTimestamp()}.md`;
 	fs.writeFileSync(path.join(dir, filename), content, "utf-8");
-	return path.join(DEV_OUTPUT_DIR, GRILL_DIRNAME, filename);
+	return path.join(DEV_OUTPUT_DIR, GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME, filename);
 }
 
 /**
  * Find the most recent answer backup file and read its content.
  * Returns undefined if no backup exists or read fails.
+ * Now reads from pi-grill/answers/ subdirectory.
  */
 export function recoverFromBackup(cwd: string): string | undefined {
-	const dir = path.join(cwd, DEV_OUTPUT_DIR, GRILL_DIRNAME);
+	const dir = path.join(cwd, DEV_OUTPUT_DIR, GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME);
 	try {
 		if (!fs.existsSync(dir)) return undefined;
 		const files = fs.readdirSync(dir)
@@ -363,12 +369,12 @@ export async function runGrillPhase(
 
 	const agentDef = options?.agentDef ?? _defaultGrillAgent;
 	const confirmTitle = options?.title ?? "🔍 设计方案评审";
-	const confirmDesc = options?.description ?? "是否进入设计评审 (Grill) 模式？\nAI 会从架构、数据流、边界条件、安全等多个维度挑战你的设计。";
+	const confirmDesc = options?.description ?? "AI 会从架构、数据流、边界条件、安全等多个维度挑战你的设计。";
 	const qTitlePrefix = options?.questionTitle ?? "设计方案评审";
 	const loaderLabel = options?.loaderLabel ?? "🧠 AI 子代理正在分析代码并生成评审问题...";
 
 	// ── Step 1: Confirm entering grill mode ──────────────────
-	const enterGrill = await ctx.ui.confirm(confirmTitle, confirmDesc);
+	const enterGrill = await uiConfirm(ctx, confirmTitle, confirmDesc);
 	if (!enterGrill) {
 		// Skip grill but continue the workflow (not a cancellation)
 		return defaultResult;
@@ -393,15 +399,12 @@ export async function runGrillPhase(
 			loader.signal,
 			undefined,
 			(progress) => {
-					// BorderedLoader 内部持有 Loader/CancellableLoader（私有 loader 字段），后者有 setText
 					const inner = (loader as unknown as { loader?: { setText?: (t: string) => void } }).loader;
 					inner?.setText?.(`🧠 ${progress.slice(0, 60)}`);
 				},
 		)
 			.then((result) => {
-				// Primary: read from file (sub-agent wrote via `write` tool)
 				let qs = readQuestionsFromFile(outputFilePath);
-				// Fallback: parse from NDJSON response text
 				if (qs.length === 0) {
 					const output = extractFinalOutput(result.output);
 					qs = parseGrillQuestions(output);
@@ -409,7 +412,6 @@ export async function runGrillPhase(
 				done(qs);
 			})
 			.catch(() => {
-				// On error, still try to read file (sub-agent may have written before error)
 				const qs = readQuestionsFromFile(outputFilePath);
 				done(qs);
 			});
@@ -419,7 +421,6 @@ export async function runGrillPhase(
 
 	// ── Step 4: Retry dialog if no questions generated ──────
 	if (questions.length === 0) {
-		// Read the failed file to get error context for the retry prompt
 		let failedFileContent = "";
 		let parseErrorMsg = "";
 		try {
@@ -431,7 +432,8 @@ export async function runGrillPhase(
 			parseErrorMsg = (e as Error).message;
 		}
 
-		const choice = await ctx.ui.select(
+		const choice = await uiSelect(
+			ctx,
 			"⚠️ AI 未能成功生成评审问题",
 			[
 				"🔄 重新尝试生成评审问题",
@@ -465,7 +467,7 @@ export async function runGrillPhase(
 					writeToolPromptSuffix(retryPath),
 					errorFeedback,
 				].filter(Boolean).join("\n\n");
-				questions = await ctx.ui.custom<GrillQuestion[]>((tui, theme, _kb, done) => {
+				const retryQuestions = await ctx.ui.custom<GrillQuestion[]>((tui, theme, _kb, done) => {
 					const loader = new BorderedLoader(tui, theme, loaderLabel);
 					loader.onAbort = () => done([]);
 					spawnSubagent(agentDef, retryPrompt, ctx.cwd, loader.signal, undefined)
@@ -477,37 +479,91 @@ export async function runGrillPhase(
 						.catch(() => done([]));
 					return loader;
 				});
-				if (questions.length === 0) {
-					ctx.ui.notify("⚠️ 再次尝试仍然失败，跳过 Grill 阶段", "warning");
+				if (retryQuestions.length === 0) {
 					return defaultResult;
 				}
-				break;
+				// Replace questions with retry results (with back support)
+				const pairs: Array<{ question: string; answer: string }> = [];
+				let rIdx = 0;
+				while (rIdx >= 0 && rIdx < retryQuestions.length) {
+					const q = retryQuestions[rIdx]!;
+					const previousAnswer = pairs[rIdx]?.answer;
+					const answer = await showQuestionTUI(ctx, q, rIdx + 1, retryQuestions.length, qTitlePrefix,
+						rIdx > 0, previousAnswer);
+					if (answer === null) {
+						return { ...defaultResult, cancelled: true, pairs };
+					}
+					if (answer === "__BACK__") {
+						if (rIdx > 0) {
+							rIdx--;
+							continue;
+						}
+						return { ...defaultResult, cancelled: true, pairs };
+					}
+					// Overwrite if re-answering, otherwise append
+					if (rIdx < pairs.length) {
+						pairs[rIdx] = { question: q.question, answer };
+					} else {
+						pairs.push({ question: q.question, answer });
+					}
+					rIdx++;
+				}
+				const qaBlock = pairs
+					.map((p, i) => `[评审问题 ${i + 1}]\n问题: ${p.question}\n回答: ${p.answer}`)
+					.join("\n\n");
+				const finalEnhancedPrompt = [
+					assembledPrompt,
+					"",
+					"---",
+					"## 设计评审记录",
+					"",
+					"以下是在开发前进行的设计评审问答，所有决策已确认：",
+					"",
+					qaBlock,
+				].join("\n");
+				return {
+					cancelled: false,
+					pairs,
+					enhancedPrompt: finalEnhancedPrompt,
+				};
 			}
 			case "⏭️ 跳过 Grill，直接发送 Prompt":
-				ctx.ui.notify("⏭️ 已跳过 Grill 阶段", "info");
 				return defaultResult;
 			case "❌ 取消 (Esc)":
 			default:
-				ctx.ui.notify("❌ 操作已取消", "warning");
 				return { ...defaultResult, cancelled: true };
 		}
 	}
 
-	ctx.ui.notify(`✅ AI 生成了 ${questions.length} 个评审问题`, "success");
-
-	// ── Step 5: TUI — present questions one by one ───────────
+	// ── Step 5: TUI — present questions one by one (with back support) ──
 	const pairs: Array<{ question: string; answer: string }> = [];
+	let qIdx = 0;
 
-	for (let idx = 0; idx < questions.length; idx++) {
-		const q = questions[idx];
-		const answer = await showQuestionTUI(ctx, q, idx + 1, questions.length, qTitlePrefix);
+	while (qIdx >= 0 && qIdx < questions.length) {
+		const q = questions[qIdx]!;
+		const previousAnswer = pairs[qIdx]?.answer;
+		const answer = await showQuestionTUI(ctx, q, qIdx + 1, questions.length, qTitlePrefix,
+			qIdx > 0, previousAnswer);
 
 		if (answer === null) {
-			ctx.ui.notify("❌ 评审已取消", "warning");
 			return { ...defaultResult, cancelled: true, pairs };
 		}
 
-		pairs.push({ question: q.question, answer });
+		if (answer === "__BACK__") {
+			if (qIdx > 0) {
+				qIdx--;
+				continue;
+			}
+			return { ...defaultResult, cancelled: true, pairs };
+		}
+
+		// Overwrite if re-answering (back then forward), otherwise append
+		if (qIdx < pairs.length) {
+			pairs[qIdx] = { question: q.question, answer };
+		} else {
+			pairs.push({ question: q.question, answer });
+		}
+		qIdx++;
 	}
 
 	// ── Step 6: Assemble enhanced prompt ─────────────────────
@@ -526,8 +582,6 @@ export async function runGrillPhase(
 		qaBlock,
 	].join("\n");
 
-	ctx.ui.notify(`✅ 评审完成，共 ${pairs.length} 道问题`, "success");
-
 	return {
 		cancelled: false,
 		pairs,
@@ -542,16 +596,31 @@ async function showQuestionTUI(
 	currentIndex: number,
 	totalCount: number,
 	titlePrefix = "设计方案评审",
+	backable = false,
+	previousAnswer?: string,
 ): Promise<string | null> {
 	const selectItems: SelectItem[] = q.options.map((opt, i) => ({
 		value: `opt-${i}`,
-		label: `(${String.fromCharCode(97 + i)}) ${opt}`,
+		label: opt === previousAnswer
+			? `(${String.fromCharCode(97 + i)}) ${opt} - 上次选择`
+			: `(${String.fromCharCode(97 + i)}) ${opt}`,
 	}));
+
+	const customLabel = previousAnswer && !q.options.includes(previousAnswer)
+		? `✏️  自定义输入 - 上次选择`
+		: `✏️  自定义输入`;
 	selectItems.push({
 		value: "__custom__",
-		label: "✏️  自定义输入",
+		label: customLabel,
 		description: "输入你自己的回答，不受选项限制",
 	});
+
+	if (backable && currentIndex > 1) {
+		selectItems.push({
+			value: "__back__",
+			label: "← 返回上一题",
+		});
+	}
 
 	const title = `${titlePrefix} (问题 ${currentIndex}/${totalCount})`;
 
@@ -576,8 +645,11 @@ async function showQuestionTUI(
 		container.addChild(selectList);
 
 		container.addChild(new Spacer(1));
+		const hint = backable && currentIndex > 1
+			? "  ↑↓ 导航 • Enter 选择 • 选择←返回上一题 • Esc 取消全部评审"
+			: "  ↑↓ 导航 • Enter 选择 • Esc 取消全部评审";
 		container.addChild(
-			new Text(theme.fg("dim", "  ↑↓ 导航 • Enter 选择 • Esc 取消全部评审"), 0, 0),
+			new Text(theme.fg("dim", hint), 0, 0),
 		);
 		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
@@ -591,13 +663,18 @@ async function showQuestionTUI(
 		};
 	});
 
+	if (value === "__back__") return "__BACK__";
 	if (value === null) return null;
 	if (value === "__custom__") {
-		const custom = await ctx.ui.input("✏️ 自定义回答", {
-			placeholder: "输入你的回答内容（Esc 取消本题，回到选项）",
-			required: false,
-		});
-		if (custom === undefined) return showQuestionTUI(ctx, q, currentIndex, totalCount);
+		const custom = await uiInput(ctx, "✏️ 自定义回答",
+			previousAnswer && !q.options.includes(previousAnswer)
+				? `(上次: ${previousAnswer.slice(0, 60)})`
+				: "输入你的回答内容（Esc 取消本题，回到选项）",
+			false, true,
+			previousAnswer && !q.options.includes(previousAnswer) ? previousAnswer : "",
+		);
+		if (custom === "__BACK__") return "__BACK__";
+		if (custom === undefined) return showQuestionTUI(ctx, q, currentIndex, totalCount, titlePrefix, backable, previousAnswer);
 		return custom.trim() || "(空)";
 	}
 
@@ -611,7 +688,7 @@ async function showQuestionTUI(
  * Run the PRD phase:
  * 1. Ask user if they want to create a PRD
  * 2. Call sub-agent → gets PRD Markdown
- * 3. Save to pi-dev-output/pi-prd/<name>.md
+ * 3. Save to .pi-dev-output/pi-prd/<name>.md
  * 4. Ask if user wants to start development
  */
 export async function runPRDPhase(
@@ -620,9 +697,10 @@ export async function runPRDPhase(
 	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext,
 ): Promise<PRDResult | null> {
-	const wantPrd = await ctx.ui.confirm(
+	const wantPrd = await uiConfirm(
+		ctx,
 		"📋 创建 PRD",
-		"是否为此功能创建 PRD 文档？\nPRD 将保存到 pi-dev-output/pi-prd/ 目录。",
+		"PRD 将保存到 .pi-dev-output/pi-prd/ 目录。",
 	);
 	if (!wantPrd) return null;
 
@@ -649,7 +727,6 @@ export async function runPRDPhase(
 	});
 
 	if (!prdContent) {
-		ctx.ui.notify("⚠️ PRD 生成失败", "error");
 		return null;
 	}
 
@@ -658,7 +735,6 @@ export async function runPRDPhase(
 	const filePath = path.join(DEV_OUTPUT_DIR, PRD_DIRNAME, filename);
 	const fullPath = path.join(prdDir, filename);
 	fs.writeFileSync(fullPath, prdContent, "utf-8");
-	ctx.ui.notify(`✅ PRD 已保存到 ${filePath}`, "success");
 
 	await askDevelopmentStart(pi, ctx, prdContent, filePath);
 	return { content: prdContent, filePath };
@@ -670,7 +746,8 @@ async function askDevelopmentStart(
 	prdContent: string,
 	prdFilePath: string,
 ): Promise<void> {
-	const choice = await ctx.ui.select(
+	const choice = await uiSelect(
+		ctx,
 		"🚀 是否开始开发？",
 		[
 			"是 — 根据 PRD 开始开发",
@@ -695,17 +772,12 @@ async function askDevelopmentStart(
 				"请按照上述 PRD 逐步实现。先分析代码库结构，给出实施计划，确认后再编写代码。",
 			].join("\n");
 			pi.sendUserMessage(devMsg, { deliverAs: "followUp" });
-			ctx.ui.notify("🚀 已发送开发指令给主代理", "success");
 			break;
 		}
 		case "否 — 稍后手动开始":
-			ctx.ui.notify(`📋 PRD 已保存在 ${prdFilePath}，可随时手动引用`, "info");
 			break;
 		default: {
-			const customMsg = await ctx.ui.input("✏️ 自定义开发指令", {
-				placeholder: "输入你的开发指令（将结合 PRD 一起发送给主代理）",
-				required: false,
-			});
+			const customMsg = await uiInput(ctx, "✏️ 自定义开发指令", "输入你的开发指令（将结合 PRD 一起发送给主代理）");
 			if (customMsg === undefined) return askDevelopmentStart(pi, ctx, prdContent, prdFilePath);
 			const finalMsg = customMsg.trim()
 				? [
@@ -725,7 +797,6 @@ async function askDevelopmentStart(
 					prdContent,
 				].join("\n");
 			pi.sendUserMessage(finalMsg, { deliverAs: "followUp" });
-			ctx.ui.notify("🚀 已发送自定义开发指令给主代理", "success");
 			break;
 		}
 	}

@@ -5,10 +5,13 @@
  * 1. parseReviewerOutput — 解析 [REVIEW_SUMMARY] JSON
  * 2. parseReviewerOutput — 兜底解析裸 JSON
  * 3. parseReviewerOutput — 无效输入返回 null
- * 4. isTimeoutResult — 正确识别超时
- * 5. isTimeoutResult — 非超时不误判
- * 6. Checkpoint 序列化/反序列化
- * 7. WorkflowStepDef 配置结构完整性
+ * 4. Bug confirmation: parseReviewerOutput fails on JSON lines output
+ * 5. Fix verification: extractFinalOutput + parseReviewerOutput works
+ * 6. parseReviewerOutputFromFile — 读取审查文件
+ * 7. isTimeoutResult — 正确识别超时
+ * 8. isTimeoutResult — 非超时不误判
+ * 9. Checkpoint 序列化/反序列化
+ * 10. WorkflowStepDef 配置结构完整性
  *
  * Run: node tests/test-workflow-engine.mjs
  */
@@ -138,7 +141,204 @@ assertEq(r5?.maxSeverity, "medium", "跨行复杂输出应正确解析");
 assertEq(r5?.medium, 3, "跨行复杂输出的 medium 计数");
 
 // ═══════════════════════════════════════════════════════════════
-//  2. isTimeoutResult
+//  Bug fix: parseReviewerOutput on JSON-formatted subagent output
+// ═══════════════════════════════════════════════════════════════
+
+console.log("\n📋 parseReviewerOutput 在 JSON 格式输出下的行为测试\n");
+
+// 模拟 --mode json 输出的 JSON lines 格式（subagent 原始输出）
+function buildJsonLinesOutput(plainText) {
+	// 模拟 pi --mode json 的流式输出格式
+	const lines = [];
+	const chunkSize = 80;
+	for (let i = 0; i < plainText.length; i += chunkSize) {
+		const chunk = plainText.slice(i, i + chunkSize);
+		lines.push(JSON.stringify({
+			type: "message_update",
+			assistantMessageEvent: {
+				type: "text_delta",
+				delta: chunk,
+			},
+		}));
+	}
+	lines.push(JSON.stringify({
+		type: "message_update",
+		assistantMessageEvent: {
+			type: "text_end",
+			content: plainText,
+		},
+	}));
+	return lines.join("\n");
+}
+
+// 模拟 extractFinalOutput（复制自 sub-agents.ts 的核心逻辑）
+function simulateExtractFinalOutput(jsonOutput) {
+	let result = "";
+	let textEndSeen = false;
+	for (const line of jsonOutput.split("\n")) {
+		if (!line.trim()) continue;
+		try {
+			const event = JSON.parse(line);
+			if (!textEndSeen && event.type === "message_update" &&
+					event.assistantMessageEvent?.type === "text_delta") {
+				result += event.assistantMessageEvent.delta || "";
+			}
+			if (event.type === "message_update" &&
+					event.assistantMessageEvent?.type === "text_end" &&
+					event.assistantMessageEvent.content) {
+				result = event.assistantMessageEvent.content;
+				textEndSeen = true;
+			}
+		} catch { /* skip non-JSON lines */ }
+	}
+	return result;
+}
+
+// Test 6: BUG CONFIRMATION — parseReviewerOutput 在 JSON lines 输出中返回 null
+const criticalText = [
+	"# 代码审查报告",
+	"",
+	"## 严重问题",
+	"### C1: 关键 bug",
+	"",
+	"[REVIEW_SUMMARY]",
+	'{"maxSeverity":"critical","critical":2,"medium":1,"low":0}',
+	"[/REVIEW_SUMMARY]",
+].join("\n");
+
+const jsonOutput = buildJsonLinesOutput(criticalText);
+const resultOnRawJson = simulateParseReviewerOutput(jsonOutput);
+assertEq(resultOnRawJson, null, "BUG: parseReviewerOutput 在原始 JSON lines 输出上应返回 null（确认 bug）");
+
+// Test 7: FIX VERIFICATION — 先用 extractFinalOutput 提取纯文本，再解析 REVIEW_SUMMARY
+const extracted = simulateExtractFinalOutput(jsonOutput);
+const resultOnExtracted = simulateParseReviewerOutput(extracted);
+assertEq(resultOnExtracted?.maxSeverity, "critical", "FIX: 提取纯文本后应正确解析 critical");
+assertEq(resultOnExtracted?.critical, 2, "FIX: critical 计数应正确");
+
+// Test 8: FIX VERIFICATION — 中等等级
+const mediumText = [
+	"[REVIEW_SUMMARY]",
+	'{"maxSeverity":"medium","critical":0,"medium":3,"low":2}',
+	"[/REVIEW_SUMMARY]",
+].join("\n");
+const jsonOutput2 = buildJsonLinesOutput(mediumText);
+const extracted2 = simulateExtractFinalOutput(jsonOutput2);
+const result2 = simulateParseReviewerOutput(extracted2);
+assertEq(result2?.maxSeverity, "medium", "FIX: 提取后 medium 等级应正确解析");
+assertEq(result2?.medium, 3, "FIX: medium 计数应正确");
+
+// Test 9: extractSeverityFromText — 从 ### C1. / ### M1. / ### L1. 格式解析
+console.log("\n📋 extractSeverityFromText 测试\n");
+
+function simulateExtractSeverityFromText(text) {
+	const headerCritical = [...text.matchAll(/^###\s+C\d+\./gm)].length;
+	const headerMedium   = [...text.matchAll(/^###\s+M\d+\./gm)].length;
+	const headerLow      = [...text.matchAll(/^###\s+L\d+\./gm)].length;
+	if (headerCritical + headerMedium + headerLow > 0) {
+		return {
+			maxSeverity: headerCritical > 0 ? "critical" : headerMedium > 0 ? "medium" : "low",
+			critical: headerCritical,
+			medium: headerMedium,
+			low: headerLow,
+		};
+	}
+	const tableCritical = [...text.matchAll(/^\|\s*\w+\s*\|\s*critical/gim)].length;
+	const tableMedium   = [...text.matchAll(/^\|\s*\w+\s*\|\s*medium/gim)].length;
+	const tableLow      = [...text.matchAll(/^\|\s*\w+\s*\|\s*low/gim)].length;
+	if (tableCritical + tableMedium + tableLow > 0) {
+		return {
+			maxSeverity: tableCritical > 0 ? "critical" : tableMedium > 0 ? "medium" : "low",
+			critical: tableCritical,
+			medium: tableMedium,
+			low: tableLow,
+		};
+	}
+	const labelCritical = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*critical/gi)].length;
+	const labelMedium   = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*medium/gi)].length;
+	const labelLow      = [...text.matchAll(/\*\*(?:Severity|严重程度|严重性)\*\*\s*:\s*low/gi)].length;
+	if (labelCritical + labelMedium + labelLow > 0) {
+		return {
+			maxSeverity: labelCritical > 0 ? "critical" : labelMedium > 0 ? "medium" : "low",
+			critical: labelCritical,
+			medium: labelMedium,
+			low: labelLow,
+		};
+	}
+	return null;
+}
+
+// 模拟 review-20260519-230500.md 的格式
+const reviewText1 = `# 代码审查\n\n### C1. [Bug] 第一个严重问题\n内容...\n### C2. [Bug] 第二个严重问题\n### M1. [优化] 中等问题\n### L1. [风格] 低优先级`;
+const sev1 = simulateExtractSeverityFromText(reviewText1);
+assertEq(sev1?.maxSeverity, "critical", "### C1. 格式应解析为 critical");
+assertEq(sev1?.critical, 2, "### C1./C2. 应计数 2 critical");
+assertEq(sev1?.medium, 1, "### M1. 应计数 1 medium");
+assertEq(sev1?.low, 1, "### L1. 应计数 1 low");
+
+// 模拟 review-20260519-231500.md 的混合格式（header 优先）
+const reviewText2 = `# 复核审查\n\n### C1. [编译错误] 文件被截断\n### C2. [编译错误] buildCp 未定义\n### C3. 重复代码\n\n| 编号 | 等级 | 状态 | 说明 |\n| C2 | critical | ✅ | 确认 |\n| M1 | medium | ✅ | 确认 |`;
+const sev2 = simulateExtractSeverityFromText(reviewText2);
+assertEq(sev2?.maxSeverity, "critical", "混合格式 header 优先应解析为 critical");
+assertEq(sev2?.critical, 3, "Header 优先: 3 critical (C1/C2/C3), 不重复计数表格行");
+
+// 纯表格格式（无 header）
+const reviewText3 = `| 编号 | 等级 | 说明 |\n| --- | --- | --- |\n| C1 | critical | Bug |\n| M1 | medium | 优化 |\n| M2 | medium | 重构 |`;
+const sev3 = simulateExtractSeverityFromText(reviewText3);
+assertEq(sev3?.maxSeverity, "critical", "纯表格格式应解析为 critical");
+assertEq(sev3?.critical, 1, "纯表格: 1 critical");
+assertEq(sev3?.medium, 2, "纯表格: 2 medium");
+
+// **Severity**: critical 标签格式
+const reviewText4 = `## 问题\n**Severity**: critical\n内容...\n**严重程度**: medium\n其他内容`;
+const sev4 = simulateExtractSeverityFromText(reviewText4);
+assertEq(sev4?.maxSeverity, "critical", "**Severity**: 标签格式应解析为 critical");
+assertEq(sev4?.critical, 1, "标签格式 critical 计数");
+
+// 无匹配
+const reviewText5 = `# 正常文档\n没有任何严重标记`;
+assertEq(simulateExtractSeverityFromText(reviewText5), null, "无匹配应返回 null");
+
+// 空文本
+assertEq(simulateExtractSeverityFromText(""), null, "空文本应返回 null");
+
+// Test 10: readLatestReviewMd — 从实际审查文件读取
+console.log("\n📋 readLatestReviewMd + extractSeverityFromText 集成测试\n");
+
+function simulateReadLatestReviewMd(cwd) {
+	const reviewDir = path.join(cwd, ".pi-dev-output", "pi-review", "md");
+	try {
+		if (!fs.existsSync(reviewDir)) return null;
+		const files = fs.readdirSync(reviewDir)
+			.filter(f => f.endsWith(".md"))
+			.map(f => ({ name: f, mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs }))
+			.sort((a, b) => b.mtime - a.mtime);
+		if (files.length === 0) return null;
+		return fs.readFileSync(path.join(reviewDir, files[0].name), "utf-8");
+	} catch { return null; }
+}
+
+const reviewContent = simulateReadLatestReviewMd(__dirname + "/..");
+if (reviewContent) {
+	const result = simulateExtractSeverityFromText(reviewContent);
+	// 最新的审查文件（230500 或 231500）都有 critical 问题
+	assertEq(typeof result?.maxSeverity, "string", "从实际审查文件应解析出 severity");
+	// 至少有一个 critical（两份新文件都有）
+	assert(result?.critical > 0, "审查文件中应检测到 critical 问题");
+} else {
+	assert(true, "无审查文件时跳过（非错误）");
+}
+
+// 不存在的目录
+assertEq(simulateReadLatestReviewMd("/nonexistent/path"), null, "不存在的目录应返回 null");
+
+// Test 11: 验证 extractFinalOutput 对已损坏/不完整输出的鲁棒性
+const partialOutput = '{"type":"message_start"}\n{"invalid json\n';
+const partialExtracted = simulateExtractFinalOutput(partialOutput);
+assertEq(typeof partialExtracted, "string", "部分损坏的输出应返回字符串而非崩溃");
+
+// ═══════════════════════════════════════════════════════════════
+//  12. isTimeoutResult
 // ═══════════════════════════════════════════════════════════════
 
 console.log("\n📋 isTimeoutResult 测试\n");

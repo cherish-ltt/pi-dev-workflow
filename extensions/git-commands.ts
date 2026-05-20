@@ -13,6 +13,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { discoverAgents, spawnSubagent, extractFinalOutput, type AgentDef } from "./sub-agents";
+import { uiInput } from "./ui-helpers";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -165,18 +166,13 @@ export default function (pi: ExtensionAPI) {
 
 			let message = args.trim();
 			if (!message) {
-				const input = await ctx.ui.input("Commit message", {
-					placeholder: "直接回车让 AI 自动生成，或输入信息后提交...",
-					required: false,
-				});
+				const input = await uiInput(ctx, "Commit message", "直接回车让 AI 自动生成，或输入信息后提交...");
 				if (input === undefined) {
-					ctx.ui.notify("Commit cancelled", "warning");
 					return;
 				}
 				message = input.trim();
 			}
 
-			ctx.ui.notify("🤖 正在委派 git-sub-agent 处理...", "info");
 
 			const task = message
 				? `Stage all changes with git add -A, then commit with message: "${message}". Do NOT ask for confirmation.`
@@ -193,7 +189,6 @@ export default function (pi: ExtensionAPI) {
 			const agent = getAgent(ctx, gitAgent, "git-agent");
 			if (!agent) return;
 
-			ctx.ui.notify("🤖 正在委派 git-sub-agent 处理...", "info");
 			await runSubAgent(
 				agent,
 				"Push commits to remote with git push. Do NOT ask for confirmation.",
@@ -211,18 +206,13 @@ export default function (pi: ExtensionAPI) {
 
 			let message = args.trim();
 			if (!message) {
-				const input = await ctx.ui.input("Commit message", {
-					placeholder: "直接回车让 AI 自动生成，或输入信息后提交并推送...",
-					required: false,
-				});
+				const input = await uiInput(ctx, "Commit message", "直接回车让 AI 自动生成，或输入信息后提交并推送...");
 				if (input === undefined) {
-					ctx.ui.notify("Commit & push cancelled", "warning");
 					return;
 				}
 				message = input.trim();
 			}
 
-			ctx.ui.notify("🤖 正在委派 git-sub-agent 处理...", "info");
 
 			const task = message
 				? `Stage all changes with git add -A, commit with message: "${message}", then push. Do NOT ask for confirmation.`

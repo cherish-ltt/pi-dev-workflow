@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { uiSelect } from "./ui-helpers";
 
 // ── Configuration ────────────────────────────────────────────
 
@@ -70,11 +71,12 @@ function loadAppendSystem(cwd: string): string | null {
 	return null;
 }
 
-/** Find the newest HTML review file in pi-review/ or pi-dev-output/pi-review/ directory. */
+/** Find the newest HTML review file in .pi-dev-output/pi-review/html/, pi-review/, or .pi-dev-output/pi-review/ directory. */
 function findNewestReviewHtml(cwd: string): string {
 	const candidates = [
+		path.join(cwd, ".pi-dev-output", "pi-review", "html"),
 		path.join(cwd, "pi-review"),
-		path.join(cwd, "pi-dev-output", "pi-review"),
+		path.join(cwd, ".pi-dev-output", "pi-review"),
 	];
 
 	for (const reviewDir of candidates) {
@@ -552,17 +554,35 @@ export default function (pi: ExtensionAPI) {
 
 	// ── /subagent-stop - 主动终止所有正在运行的 sub-agent ──────
 	pi.registerCommand("subagent-stop", {
-		description: "Terminate all running sub-agents immediately",
+		description: "Terminate all running sub-agents immediately. Also cancels any active workflow.",
 		handler: async (_args, ctx) => {
-			const count = activeChildren.size;
-			if (count === 0) {
-				ctx.ui.notify("i️ 当前没有运行中的 sub-agent", "info");
+			const childCount = activeChildren.size;
+
+			// Also try to cancel any active workflow
+			let workflowCancelled = false;
+			try {
+				const { cancelActiveWorkflow, isWorkflowRunning } = await import("./workflow-engine");
+				if (isWorkflowRunning()) {
+					cancelActiveWorkflow();
+					workflowCancelled = true;
+				}
+			} catch { /* workflow-engine not available, ignore */ }
+
+			if (childCount === 0 && !workflowCancelled) {
+				ctx.ui.notify("i️ 当前没有运行中的 sub-agent 或工作流", "info");
 				return;
 			}
-			killAllChildren();
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
-			ctx.ui.notify(`🛑 已终止 ${count} 个 sub-agent 进程`, "warning");
-			ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+
+			if (childCount > 0) {
+				killAllChildren();
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+				ctx.ui.notify(`🛑 已终止 ${childCount} 个 sub-agent 进程`, "warning");
+				ctx.ui.notify(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`, "info");
+			}
+
+			if (workflowCancelled) {
+				ctx.ui.notify(`🛑 已取消运行中的工作流`, "warning");
+			}
 		},
 	});
 
@@ -670,7 +690,8 @@ export default function (pi: ExtensionAPI) {
 
 		// 对于普通关键词触发的审查请求,询问用户选择模式
 		// ctx.ui.select 接受 string[],返回选中的字符串
-		const mode = await ctx.ui.select(
+		const mode = await uiSelect(
+			ctx,
 			"🔍 检测到审查意图",
 			[
 				"1. 后台审查(非阻塞,异步通知)",
