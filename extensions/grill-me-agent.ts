@@ -482,15 +482,31 @@ export async function runGrillPhase(
 				if (retryQuestions.length === 0) {
 					return defaultResult;
 				}
-				// Replace questions with retry results
+				// Replace questions with retry results (with back support)
 				const pairs: Array<{ question: string; answer: string }> = [];
-				for (let idx = 0; idx < retryQuestions.length; idx++) {
-					const q = retryQuestions[idx]!;
-					const answer = await showQuestionTUI(ctx, q, idx + 1, retryQuestions.length, qTitlePrefix);
+				let rIdx = 0;
+				while (rIdx >= 0 && rIdx < retryQuestions.length) {
+					const q = retryQuestions[rIdx]!;
+					const previousAnswer = pairs[rIdx]?.answer;
+					const answer = await showQuestionTUI(ctx, q, rIdx + 1, retryQuestions.length, qTitlePrefix,
+						rIdx > 0, previousAnswer);
 					if (answer === null) {
 						return { ...defaultResult, cancelled: true, pairs };
 					}
-					pairs.push({ question: q.question, answer });
+					if (answer === "__BACK__") {
+						if (rIdx > 0) {
+							rIdx--;
+							continue;
+						}
+						return { ...defaultResult, cancelled: true, pairs };
+					}
+					// Overwrite if re-answering, otherwise append
+					if (rIdx < pairs.length) {
+						pairs[rIdx] = { question: q.question, answer };
+					} else {
+						pairs.push({ question: q.question, answer });
+					}
+					rIdx++;
 				}
 				const qaBlock = pairs
 					.map((p, i) => `[评审问题 ${i + 1}]\n问题: ${p.question}\n回答: ${p.answer}`)
@@ -519,18 +535,35 @@ export async function runGrillPhase(
 		}
 	}
 
-	// ── Step 5: TUI — present questions one by one ───────────
+	// ── Step 5: TUI — present questions one by one (with back support) ──
 	const pairs: Array<{ question: string; answer: string }> = [];
+	let qIdx = 0;
 
-	for (let idx = 0; idx < questions.length; idx++) {
-		const q = questions[idx]!;
-		const answer = await showQuestionTUI(ctx, q, idx + 1, questions.length, qTitlePrefix);
+	while (qIdx >= 0 && qIdx < questions.length) {
+		const q = questions[qIdx]!;
+		const previousAnswer = pairs[qIdx]?.answer;
+		const answer = await showQuestionTUI(ctx, q, qIdx + 1, questions.length, qTitlePrefix,
+			qIdx > 0, previousAnswer);
 
 		if (answer === null) {
 			return { ...defaultResult, cancelled: true, pairs };
 		}
 
-		pairs.push({ question: q.question, answer });
+		if (answer === "__BACK__") {
+			if (qIdx > 0) {
+				qIdx--;
+				continue;
+			}
+			return { ...defaultResult, cancelled: true, pairs };
+		}
+
+		// Overwrite if re-answering (back then forward), otherwise append
+		if (qIdx < pairs.length) {
+			pairs[qIdx] = { question: q.question, answer };
+		} else {
+			pairs.push({ question: q.question, answer });
+		}
+		qIdx++;
 	}
 
 	// ── Step 6: Assemble enhanced prompt ─────────────────────
@@ -563,16 +596,31 @@ async function showQuestionTUI(
 	currentIndex: number,
 	totalCount: number,
 	titlePrefix = "设计方案评审",
+	backable = false,
+	previousAnswer?: string,
 ): Promise<string | null> {
 	const selectItems: SelectItem[] = q.options.map((opt, i) => ({
 		value: `opt-${i}`,
-		label: `(${String.fromCharCode(97 + i)}) ${opt}`,
+		label: opt === previousAnswer
+			? `(${String.fromCharCode(97 + i)}) ${opt} - 上次选择`
+			: `(${String.fromCharCode(97 + i)}) ${opt}`,
 	}));
+
+	const customLabel = previousAnswer && !q.options.includes(previousAnswer)
+		? `✏️  自定义输入 - 上次选择`
+		: `✏️  自定义输入`;
 	selectItems.push({
 		value: "__custom__",
-		label: "✏️  自定义输入",
+		label: customLabel,
 		description: "输入你自己的回答，不受选项限制",
 	});
+
+	if (backable && currentIndex > 1) {
+		selectItems.push({
+			value: "__back__",
+			label: "← 返回上一题",
+		});
+	}
 
 	const title = `${titlePrefix} (问题 ${currentIndex}/${totalCount})`;
 
@@ -597,8 +645,11 @@ async function showQuestionTUI(
 		container.addChild(selectList);
 
 		container.addChild(new Spacer(1));
+		const hint = backable && currentIndex > 1
+			? "  ↑↓ 导航 • Enter 选择 • 选择←返回上一题 • Esc 取消全部评审"
+			: "  ↑↓ 导航 • Enter 选择 • Esc 取消全部评审";
 		container.addChild(
-			new Text(theme.fg("dim", "  ↑↓ 导航 • Enter 选择 • Esc 取消全部评审"), 0, 0),
+			new Text(theme.fg("dim", hint), 0, 0),
 		);
 		container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
@@ -612,10 +663,18 @@ async function showQuestionTUI(
 		};
 	});
 
+	if (value === "__back__") return "__BACK__";
 	if (value === null) return null;
 	if (value === "__custom__") {
-		const custom = await uiInput(ctx, "✏️ 自定义回答", "输入你的回答内容（Esc 取消本题，回到选项）");
-		if (custom === undefined) return showQuestionTUI(ctx, q, currentIndex, totalCount);
+		const custom = await uiInput(ctx, "✏️ 自定义回答",
+			previousAnswer && !q.options.includes(previousAnswer)
+				? `(上次: ${previousAnswer.slice(0, 60)})`
+				: "输入你的回答内容（Esc 取消本题，回到选项）",
+			false, true,
+			previousAnswer && !q.options.includes(previousAnswer) ? previousAnswer : "",
+		);
+		if (custom === "__BACK__") return "__BACK__";
+		if (custom === undefined) return showQuestionTUI(ctx, q, currentIndex, totalCount, titlePrefix, backable, previousAnswer);
 		return custom.trim() || "(空)";
 	}
 

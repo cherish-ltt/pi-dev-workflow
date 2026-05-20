@@ -37,8 +37,9 @@ async function ask(
 	label: string,
 	placeholder: string,
 	backable = false,
+	initialValue = "",
 ): Promise<string | undefined> {
-	return uiInput(ctx, label, placeholder, false, backable);
+	return uiInput(ctx, label, placeholder, false, backable, initialValue);
 }
 
 /** Check if a field value is empty or explicitly "无". */
@@ -652,7 +653,7 @@ async function runWizardWithGrill(
 		const placeholder = existingVal
 			? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
 			: q.placeholder;
-		const val = await ask(ctx, q.label, placeholder, true);
+		const val = await ask(ctx, q.label, placeholder, true, existingVal || "");
 		if (val === undefined) {
 			return;
 		}
@@ -725,7 +726,7 @@ async function runWizard(
 		const placeholder = existingVal
 			? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
 			: q.placeholder;
-		const val = await ask(ctx, q.label, placeholder, true);
+		const val = await ask(ctx, q.label, placeholder, true, existingVal || "");
 		if (val === undefined) {
 			// Esc → cancel whole wizard
 			return;
@@ -858,7 +859,7 @@ export default function (pi: ExtensionAPI) {
 				const placeholder = existingVal
 					? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
 					: q.placeholder;
-				const val = await ask(ctx, q.label, placeholder, true);
+				const val = await ask(ctx, q.label, placeholder, true, existingVal || "");
 				if (val === undefined) {
 					return;
 				}

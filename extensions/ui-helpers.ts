@@ -215,6 +215,7 @@ export function uiInput(
     placeholder?: string,
     required = false,
     backable = false,
+    initialValue = "",
 ): Promise<string | undefined> {
     return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
         const container = new Container();
@@ -229,6 +230,9 @@ export function uiInput(
         container.addChild(new Spacer(1));
 
         const input = new Input(placeholder ?? "", width - 2);
+        if (initialValue) {
+            input.setValue(initialValue);
+        }
         input.onSubmit = (val) => {
             if (required && !val.trim()) return;
             done(val || "");
