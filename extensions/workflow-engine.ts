@@ -1706,13 +1706,23 @@ export async function runWorkflow(
 	// Collapse tools to show widget
 	ctx.ui.setToolsExpanded(false);
 
-	// ── Register terminal input handler (Esc to cancel) ──
+	// ── Register terminal input handler (Esc to cancel, with double-press confirmation) ──
 	if (ctx.hasUI) {
+		let _lastEscPressTime = 0;
 		_terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
 			if (!matchesKey(data, Key.escape)) return undefined;
 			if (_workflowRunning && _workflowAbortController && !_workflowAbortController.signal.aborted) {
-				ctx.ui.notify("⏹️ 用户取消工作流", "warning");
-				cancelWorkflow();
+				const now = Date.now();
+				if (_lastEscPressTime > 0 && now - _lastEscPressTime < 3000) {
+					// Second Esc press within 5s → confirm cancel
+					ctx.ui.notify("⏹️ 正在停止工作流...", "warning");
+					cancelWorkflow();
+					_lastEscPressTime = 0;
+					return { consume: true };
+				}
+				// First Esc press (or expired) → show hint
+				_lastEscPressTime = now;
+				ctx.ui.notify("再次按下 Esc 键，停止 Workflow - 3秒内按下有效", "warning");
 				return { consume: true };
 			}
 			return undefined;
