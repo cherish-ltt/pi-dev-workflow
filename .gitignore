@@ -8,3 +8,8 @@ Thumbs.db
 
 # Node
 node_modules/
+
+# gitnexus analyze
+.claude/
+AGENTS.md
+CLAUDE.md
