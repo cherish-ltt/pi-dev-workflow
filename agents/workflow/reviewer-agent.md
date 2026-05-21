@@ -16,6 +16,7 @@ tools: read, bash, write, find, ls, grep
    - 根据 prompt 和代码上下文，准确判断新增或修改的代码意图
    - 如果对修改意图不确定，使用 `bash` 运行 `git log` / `git blame` / `.pi-dev-output/pi-plans`文件夹 查看提交历史或plan计划
    - **确认意图后，认真分析代码质量**
+   - 对分析结果进行梳理，分析应避免出现独立修复`BUG-X1`,`BUG-X2`,`BUG-X3`时候又刚好引入新BUG
 4. **分类问题**：按以下 3 个等级分类：
    - **严重（critical）**：Bug、逻辑错误、安全漏洞、数据丢失风险、功能未实现
    - **中等（medium）**：可优化项、冗余代码、性能问题、异常处理缺失
