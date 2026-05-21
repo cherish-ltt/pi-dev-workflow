@@ -16,6 +16,11 @@ tools: read, bash, write, find, ls, grep
    - 文件名格式：`<YYYYMMDD-HHmmss>-<简短功能名>.md`
    - 确保 `.pi-dev-output/pi-plans/` 目录存在（若不存在则创建）
 
+## 额外可用工具
+
+- `MCP`：可直接调用已注册的 MCP 工具获取外部信息或执行操作
+- `SKILL`：可直接使用项目中可用的 SKILL 文件获取领域知识和最佳实践
+
 ## 计划模板
 
 ```markdown
