@@ -21,6 +21,9 @@ import {
 	SelectList,
 	Text,
 	Spacer,
+	matchesKey,
+	Key,
+	truncateToWidth,
 	type SelectItem,
 } from "@earendil-works/pi-tui";
 import { uiSelect, uiConfirm, uiInput } from "./ui-helpers";
@@ -599,12 +602,20 @@ async function showQuestionTUI(
 	backable = false,
 	previousAnswer?: string,
 ): Promise<string | null> {
-	const selectItems: SelectItem[] = q.options.map((opt, i) => ({
-		value: `opt-${i}`,
-		label: opt === previousAnswer
-			? `(${String.fromCharCode(97 + i)}) ${opt} - 上次选择`
-			: `(${String.fromCharCode(97 + i)}) ${opt}`,
-	}));
+	const MAX_OPTION_LABEL = 50;
+	const selectItems: SelectItem[] = q.options.map((opt, i) => {
+		const prefix = `(${String.fromCharCode(97 + i)}) `;
+		const label = opt === previousAnswer
+			? `${prefix}${opt} - 上次选择`
+			: `${prefix}${opt}`;
+		const truncated = truncateToWidth(label, MAX_OPTION_LABEL, "...");
+		return {
+			value: `opt-${i}`,
+			label: truncated,
+			// 只有被截断时才提供 description，展示完整文本
+			description: truncated !== label ? opt : undefined,
+		};
+	});
 
 	const customLabel = previousAnswer && !q.options.includes(previousAnswer)
 		? `✏️  自定义输入 - 上次选择`
@@ -646,7 +657,7 @@ async function showQuestionTUI(
 
 		container.addChild(new Spacer(1));
 		const hint = backable && currentIndex > 1
-			? "  ↑↓ 导航 • Enter 选择 • 选择←返回上一题 • Esc 取消全部评审"
+			? "  ↑↓ 导航 • Enter 选择 • ← 返回上一题 • Esc 取消全部评审"
 			: "  ↑↓ 导航 • Enter 选择 • Esc 取消全部评审";
 		container.addChild(
 			new Text(theme.fg("dim", hint), 0, 0),
@@ -657,6 +668,11 @@ async function showQuestionTUI(
 			render: (w) => container.render(w),
 			invalidate: () => container.invalidate(),
 			handleInput: (data) => {
+				// 左方向键 → 返回上一题（SelectList 不处理 left 键，需自行拦截）
+				if (backable && currentIndex > 1 && matchesKey(data, Key.left)) {
+					done("__BACK__");
+					return;
+				}
 				selectList.handleInput(data);
 				tui.requestRender();
 			},

@@ -207,7 +207,7 @@ export function uiConfirm(
 /**
  * Show an input dialog with proper wrapping.
  * Returns the entered string, or BACK_MARKER on back, or undefined on cancel.
- * When backable=true, supports Ctrl+Shift+← for back and Ctrl+Shift+→ for submit+next.
+ * When backable=true, supports ← for back, Ctrl+Shift+← for back, and Ctrl+Shift+→ for submit+next.
  */
 export function uiInput(
     ctx: ExtensionCommandContext,
@@ -227,6 +227,11 @@ export function uiInput(
         for (const line of labelWrapped.slice(1)) {
             container.addChild(new Text(theme.fg("accent", `  ${line}`), 0, 0));
         }
+        container.addChild(new Spacer(1));
+
+        // 实时换行预览区域（在输入框上方）
+        const previewText = new Text("", 0, 0);
+        container.addChild(previewText);
         container.addChild(new Spacer(1));
 
         const input = new Input(placeholder ?? "", width - 2);
@@ -255,6 +260,12 @@ export function uiInput(
             render: (w) => container.render(w),
             invalidate: () => container.invalidate(),
             handleInput: (data) => {
+                // 左方向键 → 返回（优先于 Input 的光标左移）
+                if (backable && matchesKey(data, Key.left)) {
+                    done(BACK_MARKER);
+                    return;
+                }
+
                 // Intercept back/next keys before passing to Input
                 if (backable) {
                     // Ctrl+Shift+← → go back to previous question
@@ -269,6 +280,19 @@ export function uiInput(
                     }
                 }
                 input.handleInput(data);
+
+                // 读取更新后的 value，更新预览
+                const val = input.getValue();
+                if (val.length > 0) {
+                    const wrapped = wrapTextWithAnsi(val, width - 4);
+                    const previewContent = wrapped
+                        .map(l => theme.fg("dim", `  ${l}`))
+                        .join("\n");
+                    previewText.setText(previewContent);
+                } else {
+                    previewText.setText("");
+                }
+
                 tui.requestRender();
             },
         };
