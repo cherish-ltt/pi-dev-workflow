@@ -486,9 +486,13 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
             loopStr = dim(theme, ` · 第 ${s.loopCount} 次循环`);
         } else if (s.maxLoops != null) {
             if (isRunning) {
-                // 当 loop-group 开始运行时，即使 loopCount 尚未通过 updateWidgetStep 设置，
-                // 也显示"第 1 次循环"（第 0 次循环仅用于 pending 状态）
-                loopStr = dim(theme, ` · 第 1 次循环`);
+                // 当 loop-group 开始运行时，loopCount 已经通过 executeLoopGroup 在循环开头设置了，
+                // 所以不需要 fallback 显示"第 1 次循环"
+                // 直接使用 s.loopCount 的值
+                if (s.loopCount == null || s.loopCount === 0) {
+                    // 安全 fallback（理论上不会走到这里）
+                    loopStr = dim(theme, ` · 第 1 次循环`);
+                }
             } else if (isPending) {
                 loopStr = dim(theme, ` · 第 0 次循环`);
             }

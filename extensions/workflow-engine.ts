@@ -300,15 +300,26 @@ function getGitDiffChanges(cwd: string): GitFileChange[] {
 			for (const line of diffOutput.split("\n")) {
 				const trimmed = line.trim();
 				if (!trimmed) continue;
-				// git diff --name-status output format: X\tfilepath\n
-				// Split by tab, X is status char, filepath is the rest
-				const parts = trimmed.split("\t");
-				if (parts.length === 2) {
-					const status = parts[0]!.trim();
-					const filePath = parts[1]!.trim();
+				// 使用正则解析：支持 tab 分隔（"M\tpath"）和空格填充（"M       path"）两种格式
+				const statusMatch = trimmed.match(/^([MAD])\s+(.+)$/);
+				if (statusMatch) {
+					const status = statusMatch[1]!.trim();
+					const filePath = statusMatch[2]!.trim();
 					if (filePath && !seen.has(filePath) && (status === "M" || status === "A" || status === "D")) {
 						seen.add(filePath);
 						changes.push({ status: status as "M" | "A" | "D", path: filePath });
+					}
+				}
+				// 后备：tab split（兼容部分 git 版本输出的 tab 格式）
+				else if (trimmed.includes("\t")) {
+					const parts = trimmed.split("\t");
+					if (parts.length === 2) {
+						const status = parts[0]!.trim();
+						const filePath = parts[1]!.trim();
+						if (filePath && !seen.has(filePath) && (status === "M" || status === "A" || status === "D")) {
+							seen.add(filePath);
+							changes.push({ status: status as "M" | "A" | "D", path: filePath });
+						}
 					}
 				}
 			}
@@ -321,14 +332,15 @@ function getGitDiffChanges(cwd: string): GitFileChange[] {
 			for (const line of statusOutput.split("\n")) {
 				const trimmed = line.trim();
 				if (!trimmed) continue;
-				// "?? path" means untracked/new
-				// Also catch "A  path" for staged new files
-				// git status --porcelain: first 2 chars are status, then space(s), then path
-				const statusPrefix = trimmed.slice(0, 2); // e.g., "??", " M", "A "
-				const filePath = trimmed.slice(3).trim(); // after "?? " or " M " etc.
-				if (filePath && !seen.has(filePath) && (statusPrefix === "??" || statusPrefix === "A " || statusPrefix.startsWith("A"))) {
-					seen.add(filePath);
-					changes.push({ status: "A", path: filePath });
+				// 使用正则解析 --porcelain 格式：前 2 字符状态码 + 空格 + 路径
+				const statusMatch2 = trimmed.match(/^(..)\s+(.+)$/);
+				if (statusMatch2) {
+					const statusPrefix = statusMatch2[1]!.trim();
+					const filePath = statusMatch2[2]!.trim();
+					if (filePath && !seen.has(filePath) && (statusPrefix === "??" || statusPrefix === "A " || statusPrefix.startsWith("A"))) {
+						seen.add(filePath);
+						changes.push({ status: "A", path: filePath });
+					}
 				}
 			}
 		}
@@ -1022,6 +1034,10 @@ async function runAgentWithProgress(
 				if (filePath.startsWith("http")) continue;
 				if (filePath.length < 6 && !filePath.includes("/")) continue;
 
+				// 额外过滤器：排除明显不是文件路径的脏数据
+				if (filePath.includes("${") || filePath.includes("\\n") || filePath.includes("\\t")) continue;  // 排除模板字符串和转义字符
+				if (filePath.includes("[]") || filePath.includes("{}")) continue;  // 排除数组/对象字面量
+				if (filePath.match(/^[\s,;)\]}]+$/)) continue;  // 排除纯符号
 				seenTools.add(filePath);
 				const fullMatch = m[0]!.toLowerCase();
 				// Determine operation type and convert to git status
@@ -1188,6 +1204,15 @@ async function executeLoopGroup(
 	const reviewTimeoutMs = step.reviewTimeoutMs ?? step.timeoutMs;
 
 	while (loopCount < maxLoops) {
+		loopCount++;
+		// 立即更新 UI 显示当前循环次数
+		state.loopCount = loopCount;
+		updateWidgetStep(stepIndex, step.label, "running", {
+			loopCount,
+			maxLoops: step.maxLoops,
+			startedAt: _widgetSteps[stepIndex]?.startedAt || Date.now(),
+		});
+
 		// 每次循环开始时重置 sub-step 状态
 		setWidgetSubStepStatus(stepIndex, step.loopAgentName!, "pending");
 		setWidgetSubStepStatus(stepIndex, step.reviewAgentName!, "pending");
@@ -1250,15 +1275,6 @@ async function executeLoopGroup(
 				reviewSummary = parseReviewerOutput(reviewContent) ?? extractSeverityFromText(reviewContent);
 			}
 		}
-
-		loopCount++;
-		// 立即更新 UI 显示当前循环次数
-		state.loopCount = loopCount;
-		updateWidgetStep(stepIndex, step.label, "running", {
-			loopCount,
-			maxLoops: step.maxLoops,
-			startedAt: _widgetSteps[stepIndex]?.startedAt || Date.now(),
-		});
 
 		if (reviewSummary?.maxSeverity === "critical" && loopCount < maxLoops) {
 			if (mode === "full-auto") {
