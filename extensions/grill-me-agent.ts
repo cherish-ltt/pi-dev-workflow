@@ -24,6 +24,7 @@ import {
 	matchesKey,
 	Key,
 	truncateToWidth,
+	wrapTextWithAnsi,
 	type SelectItem,
 } from "@earendil-works/pi-tui";
 import { uiSelect, uiConfirm, uiInput } from "./ui-helpers";
@@ -599,6 +600,15 @@ export async function runGrillPhase(
  *   - ↑↓ 选择, Enter 确认, Esc 取消全部评审
  *   - Ctrl+Shift+← 返回上一题（仅当 backable=true 且 currentIndex > 1 时生效）
  *   - 选择 "✏️ 自定义输入" 进入文本输入模式
+ *
+ * @param ctx - Extension command context for TUI rendering
+ * @param q - The grill question to display
+ * @param currentIndex - 1-based index of current question
+ * @param totalCount - Total number of questions
+ * @param titlePrefix - Prefix for the question title bar
+ * @param backable - Whether navigating back to previous question is allowed
+ * @param previousAnswer - Previous answer to pre-fill as "上次选择" marker
+ * @returns Selected option text, "__BACK__" for back navigation, or null for cancel
  */
 async function showQuestionTUI(
 	ctx: ExtensionCommandContext,
@@ -609,18 +619,19 @@ async function showQuestionTUI(
 	backable = false,
 	previousAnswer?: string,
 ): Promise<string | null> {
-	const MAX_OPTION_LABEL = 50;
+	// 根据终端宽度计算截断宽度
+	const termWidth = process.stdout.columns || 120;
+	const maxOptWidth = Math.min(termWidth - 12, 100);
 	const selectItems: SelectItem[] = q.options.map((opt, i) => {
 		const prefix = `(${String.fromCharCode(97 + i)}) `;
 		const label = opt === previousAnswer
 			? `${prefix}${opt} - 上次选择`
 			: `${prefix}${opt}`;
-		const truncated = truncateToWidth(label, MAX_OPTION_LABEL, "...");
+		const truncated = truncateToWidth(label, maxOptWidth, "...");
 		return {
 			value: `opt-${i}`,
 			label: truncated,
-			// 只有被截断时才提供 description，展示完整文本
-			description: truncated !== label ? opt : undefined,
+			// 完整文本由下方的预览面板展示（支持换行），description 列无法换行故移除
 		};
 	});
 
@@ -657,10 +668,42 @@ async function showQuestionTUI(
 			description: (s) => theme.fg("muted", s),
 			scrollInfo: (s) => theme.fg("dim", s),
 			noMatch: (s) => theme.fg("warning", s),
+		}, {
+			minPrimaryColumnWidth: 30,
+			maxPrimaryColumnWidth: maxOptWidth + 2,
+			truncatePrimary: ({ text, maxWidth }) => truncateToWidth(text, maxWidth, "..."),
 		});
 		selectList.onSelect = (item) => done(item.value);
 		selectList.onCancel = () => done(null);
 		container.addChild(selectList);
+
+		// 完整选项预览面板（支持换行，展示当前选中选项的完整文本）
+		const previewWidth = Math.max(30, termWidth - 8);
+		const previewText = new Text("", 0, 0);
+		container.addChild(new Spacer(1));
+		container.addChild(previewText);
+
+		// 初始化预览为第一个选项
+		if (q.options.length > 0) {
+			const initialWrapped = wrapTextWithAnsi(q.options[0], previewWidth);
+			previewText.setText(
+				initialWrapped.map(l => theme.fg("dim", `  ${l}`)).join("\n")
+			);
+		}
+
+		selectList.onSelectionChange = (item) => {
+			if (item.value.startsWith("opt-")) {
+				const idx = parseInt(item.value.replace("opt-", ""), 10);
+				const fullText = q.options[idx];
+				const wrapped = wrapTextWithAnsi(fullText, previewWidth);
+				previewText.setText(
+					wrapped.map(l => theme.fg("dim", `  ${l}`)).join("\n")
+				);
+			} else {
+				previewText.setText("");
+			}
+			tui.requestRender();
+		};
 
 		container.addChild(new Spacer(1));
 		const hint = backable && currentIndex > 1
