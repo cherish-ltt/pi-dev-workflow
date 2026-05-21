@@ -804,6 +804,24 @@ function setWidgetSubStepStatus(stepIndex: number, agentName: string, status: Wo
     }
 }
 
+/**
+ * 重置子步骤为 pending 状态并清除计时信息（durationMs/startedAt）。
+ * 用于循环组中开启新循环时，清除上一轮的计时数据。
+ */
+function resetWidgetSubStepTimers(stepIndex: number, agentName: string): void {
+    const step = _widgetSteps[stepIndex];
+    if (!step) return;
+    const sub = step.subSteps?.find(s => s.agent === agentName);
+    if (sub) {
+        sub.status = "pending";
+        sub.durationMs = undefined;
+        sub.startedAt = undefined;
+        sub.tools = [];
+        sub.outputs = [];
+    }
+    refreshWidget();
+}
+
 function setWidgetCurrentStep(index: number): void {
 	_widgetCurrentIdx = index;
 	refreshWidget();
@@ -1128,6 +1146,14 @@ async function runAgentWithProgress(
 		"done";
 	setWidgetSubStepStatus(stepIndex, agentName, subStatus);
 
+	// ⭐ 修复：代理完成后设置最终持续时长并清除 startedAt
+	// 确保 UI 使用记录的 durationMs 而非实时 Date.now() - startedAt
+	const completedSub = _widgetSteps[stepIndex]?.subSteps?.find(s => s.agent === agentName);
+	if (completedSub) {
+		completedSub.durationMs = agentDuration;
+		completedSub.startedAt = undefined;
+	}
+
 	return result;
 }
 
@@ -1213,9 +1239,9 @@ async function executeLoopGroup(
 			startedAt: _widgetSteps[stepIndex]?.startedAt || Date.now(),
 		});
 
-		// 每次循环开始时重置 sub-step 状态
-		setWidgetSubStepStatus(stepIndex, step.loopAgentName!, "pending");
-		setWidgetSubStepStatus(stepIndex, step.reviewAgentName!, "pending");
+		// 每次循环开始时重置 sub-step 状态（清除上一轮的计时和工具记录）
+		resetWidgetSubStepTimers(stepIndex, step.loopAgentName!);
+		resetWidgetSubStepTimers(stepIndex, step.reviewAgentName!);
 		const loopStartTime = Date.now();
 
 		// Run loop agent

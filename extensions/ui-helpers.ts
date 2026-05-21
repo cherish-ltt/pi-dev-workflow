@@ -466,20 +466,6 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
             icon = dim(theme, "◦");
         }
 
-        // ── Duration ──
-        let displayDurMs: number | undefined = s.durationMs;
-        if (isRunning && s.startedAt) {
-            displayDurMs = Date.now() - s.startedAt;
-        }
-        const durStr =
-            displayDurMs != null
-                ? dim(theme, ` (${formatDurationFull(displayDurMs)}`)
-                : isRunning
-                  ? dim(theme, ` (0s`)
-                  : "";
-        const timeout = s.timeoutMs ? dim(theme, `/超时时间${formatTimeout(s.timeoutMs)}`) : "";
-        const durClose = displayDurMs != null || isRunning ? dim(theme, ")") : "";
-
         // ── Loop count (第 N 次循环) for loop-group steps ──
         let loopStr = "";
         if (s.loopCount != null && s.loopCount > 0) {
@@ -520,8 +506,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
             stepIndent = "      ";
         }
 
-        // ── Step line ──
-        lines.push(`${stepIndent}${icon} ${labelStyle}${loopStr}${durStr}${timeout}${durClose}`);
+        // ── Step line (注意：计时/超时信息只在子代理行展示，不在父步骤行展示) ──
+        lines.push(`${stepIndent}${icon} ${labelStyle}${loopStr}`);
 
         // ── Sub-steps (agents with |__ tree) ──
         if (s.subSteps && s.subSteps.length > 0) {
@@ -550,11 +536,14 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                 let subDurStr = "";
                 let subTimeoutStr = "";
                 let subDurClose = "";
+                // ⭐ 修复：已完成/失败的子代理使用记录的 durationMs，运行中使用 live 计时
                 let elapsedMs: number | undefined;
-                if (sub.startedAt) {
-                    elapsedMs = Date.now() - sub.startedAt;
-                } else if (sub.durationMs != null) {
+                if (isSubDone) {
+                    // 已完成 → 使用最终记录的 durationMs（代理完成时已冻结）
                     elapsedMs = sub.durationMs;
+                } else if (isSubRunning && sub.startedAt) {
+                    // 运行中 → 实时计算从 startedAt 到现在的时长
+                    elapsedMs = Date.now() - sub.startedAt;
                 }
                 if (elapsedMs != null) {
                     subDurStr = dim(theme, ` (${formatDurationFull(elapsedMs)}`);
