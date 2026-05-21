@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Review Report</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f5;color:#333;line-height:1.6;padding:20px}
+.container{max-width:960px;margin:0 auto}
+h1{font-size:24px;margin-bottom:8px;color:#1a1a1a}
+.summary{background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.summary-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+.summary-item{background:#fafafa;padding:12px;border-radius:6px}
+.summary-item .label{font-size:12px;color:#666;text-transform:uppercase}
+.summary-item .value{font-size:20px;font-weight:700;margin-top:4px}
+.bug-count .value{color:#d32f2f}
+.warn-count .value{color:#f57c00}
+.info-count .value{color:#1976d2}
+.score{font-size:36px;font-weight:700;text-align:center;padding:16px;background:#fafafa;border-radius:6px;margin-top:12px}
+.score.good{color:#2e7d32}
+.score.fair{color:#f57c00}
+.commit-msg{background:#e8f5e9;padding:12px 16px;border-radius:6px;margin-top:12px;font-family:"SF Mono","Consolas",monospace;font-size:13px;color:#2e7d32}
+.file-group{background:#fff;border-radius:8px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.1);overflow:hidden}
+.file-header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;cursor:pointer;transition:background .15s}
+.file-header:hover{background:#f0f0f0}
+.file-header .path{font-family:"SF Mono","Consolas",monospace;font-size:14px;font-weight:600;color:#1a1a1a}
+.file-header .status{display:flex;gap:8px;align-items:center}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.badge.bug{background:#ffebee;color:#c62828}
+.badge.warn{background:#fff3e0;color:#e65100}
+.badge.info{background:#e3f2fd;color:#1565c0}
+.file-body{display:none;padding:0 20px 20px;border-top:1px solid #eee}
+.file-body.open{display:block}
+.issue{margin:12px 0;padding:12px 16px;border-left:4px solid #ccc;background:#fafafa;border-radius:0 6px 6px 0}
+.issue.bug{border-color:#d32f2f}
+.issue.warn{border-color:#f57c00}
+.issue.info{border-color:#1976d2}
+.issue .tag{font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:4px}
+.issue.bug .tag{color:#d32f2f}
+.issue.warn .tag{color:#f57c00}
+.issue.info .tag{color:#1976d2}
+.issue .desc{font-size:14px;margin:4px 0}
+.issue .code{background:#272822;color:#f8f8f2;padding:8px 12px;border-radius:4px;font-size:13px;font-family:"SF Mono","Consolas",monospace;margin:6px 0;overflow-x:auto;white-space:pre}
+.diff-stats{font-size:12px;color:#666;margin-left:12px}
+.add{color:#2e7d32}
+.del{color:#c62828}
+.toggle-icon{color:#999;font-size:12px}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🔍 Code Review Report</h1>
+
+<div class="summary">
+<p><strong>审查范围：</strong>git diff HEAD（4 files changed, +56, -30）</p>
+
+<div class="summary-grid">
+<div class="summary-item bug-count"><div class="label">BUG</div><div class="value">2</div></div>
+<div class="summary-item warn-count"><div class="label">敏感信息</div><div class="value">1</div></div>
+<div class="summary-item info-count"><div class="label">可维护性</div><div class="value">1</div></div>
+<div class="summary-item info-count"><div class="label">规范</div><div class="value">1</div></div>
+</div>
+
+<div class="score fair">评分：55/100</div>
+<p style="margin-top:8px;font-size:14px;color:#666;text-align:center">存在 2 个 BUG（运行时错误），1 个敏感信息变更，扣分严重</p>
+
+<div class="commit-msg">
+<strong>💡 commit message 建议：</strong><br>
+<code>feat: 增加 reviewTimeoutMs 独立超时配置，修复 workflow sub-step 状态重置函数名错误</code>
+</div>
+</div>
+
+<!-- workflow-engine.ts -->
+<div class="file-group">
+<div class="file-header" onclick="this.nextElementSibling.classList.toggle('open')">
+<span>
+<span class="path">extensions/workflow-engine.ts</span>
+<span class="diff-stats"><span class="add">+27</span> <span class="del">-11</span></span>
+</span>
+<span class="status">
+<span class="badge bug">2 BUG</span>
+<span class="badge warn">1 敏感</span>
+<span class="toggle-icon">▶</span>
+</span>
+</div>
+<div class="file-body">
+<div class="issue bug">
+<div class="tag">🛑 BUG · 最高优先级</div>
+<div class="desc"><strong>调用已重命名的函数导致 ReferenceError</strong></div>
+<div class="desc">第 1193-1194 行调用 <code>setWidgetSubStepStatus()</code>，但该函数在第 783 行被重命名为 <code>resetWidgetSubStep()</code>（参数从 (status) 变为固定 "pending" 并增加重置 detail/tools/outputs 逻辑）。旧函数名已被删除，运行时将抛出 <code>ReferenceError: setWidgetSubStepStatus is not defined</code>。</div>
+<div class="code">// 第 1193-1194 行（executeLoopGroup）
+setWidgetSubStepStatus(stepIndex, step.loopAgentName!, "pending");
+setWidgetSubStepStatus(stepIndex, step.reviewAgentName!, "pending");</div>
+<div class="desc"><strong>修复：</strong>改为调用 <code>resetWidgetSubStep(stepIndex, step.loopAgentName!)</code> 等。</div>
+</div>
+
+<div class="issue bug">
+<div class="tag">🛑 BUG · 最高优先级</div>
+<div class="desc"><strong>runAgentWithProgress 中仍调用已删除的函数</strong></div>
+<div class="desc">第 1114 行仍调用 <code>setWidgetSubStepStatus(stepIndex, agentName, subStatus)</code>，该函数已被删除。执行单步 agent 完成后也会抛出 ReferenceError。</div>
+<div class="code">// 第 1114 行（runAgentWithProgress 末尾）
+setWidgetSubStepStatus(stepIndex, agentName, subStatus);</div>
+<div class="desc"><strong>修复：</strong>将旧函数逻辑恢复，或改写为直接修改 sub-step 状态。</div>
+</div>
+
+<div class="issue warn">
+<div class="tag">⚠️ 敏感信息 · 高优先级</div>
+<div class="desc"><strong>runAgentWithProgress 中 sub-step detail 硬编码中文提醒信息</strong></div>
+<div class="desc">新增的 <code>detail: "超时时间${formatTimeout(timeoutMs)}"</code> 是 UI 展示文本，在 engine 层硬编码中文。当工具函数输出被序列化或用于日志管道时，中文文本可能引起编码问题或混乱。建议使用英文 key（如 <code>timeoutText</code> 或分离 data/ui 层）。</div>
+</div>
+
+<div class="issue info">
+<div class="tag">🔧 可维护性 · 中优先级</div>
+<div class="desc"><strong>loop-group 未展示 timeoutMs 但 reviewer 仍有独立超时</strong></div>
+<div class="desc"><code>executeWorkflowBackground</code> 中 loop-group 步骤的 <code>updateWidgetStep</code> 调用传入 <code>timeoutMs: undefined</code>，这合理（loop-group 的 timeout 逻辑在内部）。但 reviewTimeoutMs 并未在 widget 中展示，建议在 sub-step detail 中体现 reviewer 的独立超时。</div>
+</div>
+</div>
+</div>
+
+<!-- dev-prompts.ts -->
+<div class="file-group">
+<div class="file-header" onclick="this.nextElementSibling.classList.toggle('open')">
+<span>
+<span class="path">extensions/dev-prompts.ts</span>
+<span class="diff-stats"><span class="add">+16</span> <span class="del">-8</span></span>
+</span>
+<span class="status">
+<span class="badge info">1 规范</span>
+<span class="toggle-icon">▶</span>
+</span>
+</div>
+<div class="file-body">
+<div class="issue info">
+<div class="tag">📐 规范 · 低优先级</div>
+<div class="desc"><strong>所有 loop-group 配置的高 timeoutMs 应与 reviewTimeoutMs 有明确注释</strong></div>
+<div class="desc">将 <code>timeoutMs</code> 从 900_000（15min）提升到 1_800_000（30min），并新增 <code>reviewTimeoutMs: 900_000</code>。改动意图明确，配置值合理。但所有步骤的 <code>timeoutMs</code> 和 <code>reviewTimeoutMs</code> 高度重复，建议提取为常量以提高可维护性。</div>
+<div class="code">// 建议提取为命名常量
+const LOOP_TIMEOUT_MS = 1_800_000;  // 30min
+const REVIEW_TIMEOUT_MS = 900_000;  // 15min
+const TRIM_TIMEOUT_MS = 1_200_000;  // 20min</div>
+</div>
+</div>
+</div>
+
+<!-- ui-helpers.ts -->
+<div class="file-group">
+<div class="file-header" onclick="this.nextElementSibling.classList.toggle('open')">
+<span>
+<span class="path">extensions/ui-helpers.ts</span>
+<span class="diff-stats"><span class="add">+1</span> <span class="del">-4</span></span>
+</span>
+<span class="status">
+<span class="badge info">1 可维护性</span>
+<span class="toggle-icon">▶</span>
+</span>
+</div>
+<div class="file-body">
+<div class="issue info">
+<div class="tag">🔧 可维护性 · 中优先级</div>
+<div class="desc"><strong>formatTimeout 改为 export，移除 running 状态下强制显示「第 1 次循环」的特判</strong></div>
+<div class="desc"><code>formatTimeout</code> 被导出供 workflow-engine 使用，改动合理。移除 isRunning 分支的「第 1 次循环」硬编码，改为由 engine 层通过 <code>updateWidgetStep</code> 及时更新 <code>loopCount</code>，设计更清晰。pending 状态仍显示「第 0 次循环」，语义明确。</div>
+</div>
+</div>
+</div>
+
+<!-- .gitignore -->
+<div class="file-group">
+<div class="file-header" onclick="this.nextElementSibling.classList.toggle('open')">
+<span>
+<span class="path">.gitignore</span>
+<span class="diff-stats"><span class="del">-4</span></span>
+</span>
+<span class="status">
+<span class="badge warn">1 敏感</span>
+<span class="toggle-icon">▶</span>
+</span>
+</div>
+<div class="file-body">
+<div class="issue warn">
+<div class="tag">⚠️ 敏感信息 · 高优先级</div>
+<div class="desc"><strong>移除 pi-review/ 和 pi-dev-output/ 的 gitignore 规则</strong></div>
+<div class="desc">提交移除了 <code>pi-review/</code> 和 <code>pi-dev-output/</code> 的 ignore 规则。这两个目录是 pi 框架的产物输出目录，包含审查报告、构建产物等。如果属于不应提交到版本控制的生成产物，应保留 ignore 规则。请确认这是有意的行为（例如要将产物纳入版本管理），或是误删。</div>
+</div>
+</div>
+</div>
+
+</div>
+<script>
+document.querySelectorAll('.file-body.open').forEach(el=>el.classList.remove('open'));
+document.querySelectorAll('.file-header').forEach(h=>{
+h.addEventListener('click',function(){const b=this.querySelector('.toggle-icon');b.textContent=b.textContent==='▶'?'▼':'▶';});
+});
+</script>
+</body>
+</html>

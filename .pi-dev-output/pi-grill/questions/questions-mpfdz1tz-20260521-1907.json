@@ -1,0 +1,94 @@
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "关于 loopCount UI 不同步问题：executeLoopGroup() 内部的 while 循环中，每次迭代完成后（loopCount++ 之后），是否应该立即调用 updateWidgetStep() 更新 UI 中的 loopCount？还是你认为只在 executeLoopGroup 返回后由外层 executeWorkflowBackground 统一更新即可？",
+      "options": [
+        "a[推荐] 在 executeLoopGroup 的 while 循环内，每次 loopCount++ 之后立即调用 updateWidgetStep() 更新 UI 当前循环次数",
+        "b 不需要改 UI 逻辑，是 UI 构建函数 buildWidgetLines 中的 loopStr 渲染条件太严格导致",
+        "c 在外层 executeWorkflowBackground 的 for 循环内增加额外逻辑来刷新 loopGroup 的 UI"
+      ]
+    },
+    {
+      "id": 2,
+      "question": "关于超时时间分离问题：executeLoopGroup() 中 reviewer 和 loopAgent 使用相同的 step.timeoutMs。你希望 reviewer 使用独立的超时时间，还是认为只需在 UI 上把显示的超时时间区分开即可？",
+      "options": [
+        "a[推荐] 给 WorkflowStepDef 增加 reviewTimeoutMs 字段，reviewer 使用独立的超时时间",
+        "b 不需要增加字段，只是在 UI 上正确显示各自的超时时间（当前问题只是 UI 显示问题）",
+        "c 在 loop-group 的配置项中新增 reviewer 专用的超时配置"
+      ]
+    },
+    {
+      "id": 3,
+      "question": "关于默认超时时间调整：当前配置中 worker 是 900000ms (15min)，trimmer 是 300000ms (5min)，reviewer 是 900000ms(loop-group中) 或 300000ms(独立步骤)。根据需求，worker 应改为 30min (1800000ms)，trimmer 应改为 20min (1200000ms)，reviewer 保持 15min (900000ms)。这些超时是硬编码在 dev-prompts.ts 的 WorkflowStepDef 中的，还是有其他来源？",
+      "options": [
+        "a[推荐] 直接在 dev-prompts.ts 中修改各个 WorkflowStepDef 的 timeoutMs 值",
+        "b 需要通过配置文件或环境变量来设置",
+        "c 从 agent 定义（sub-agents.ts 中的 AgentDef）中动态读取超时时间"
+      ]
+    },
+    {
+      "id": 4,
+      "question": "关于超时时间的粒度：如果给 reviewer 独立超时，是每个 loop-group 内的 reviewer 都用固定 15min？还是不同 loop-group（worker-reviewer vs trimmer-reviewer）中的 reviewer 应该有不同的超时值？",
+      "options": [
+        "a[推荐] 所有 reviewer 统一使用固定的超时时间 15min（900000ms）",
+        "b worker-reviewer 中的 reviewer 用 15min，trimmer-reviewer 中的 reviewer 用 10min",
+        "c 在 WorkflowStepDef 中为 reviewer 单独配置不同的超时值"
+      ]
+    },
+    {
+      "id": 5,
+      "question": "确认一下：当前 executeLoopGroup() 中，loopAgent（worker/trimmer）和 reviewer 都用同一个 step.timeoutMs 传给 runAgentWithProgress。如果要分离超时，你建议 reviewer 的超时时间从哪里读取？",
+      "options": [
+        "a[推荐] 从 WorkflowStepDef 的新字段 reviewTimeoutMs 读取",
+        "b 从 agentMap.get(reviewAgentName!).timeoutMs 读取（AgentDef 上的超时）",
+        "c 固定写 900000ms 硬编码在 executeLoopGroup 中"
+      ]
+    },
+    {
+      "id": 6,
+      "question": "关于 loopCount 显示细节：当前 buildWidgetLines 中，当 loop-group 处于 running 状态时，loopStr 固定显示 \"第 1 次循环\"。进入第 2, 3, 4 次循环时 UI 仍然是 \"第 1 次循环\"。除了上面第 1 问提到的在循环中更新 UI，widget 端是否也需要调整 loopStr 的判断逻辑？",
+      "options": [
+        "a[推荐] 同时修改两端：executeLoopGroup 每次循环后更新 widget，同时 buildWidgetLines 中直接从 s.loopCount 读取显示",
+        "b 只需修 executeLoopGroup 端，UI widget 渲染逻辑已经能正确处理 loopCount>0 的情况",
+        "c 只需修 UI widget 端，让它在 running 状态下也能正确渲染变化的 loopCount"
+      ]
+    },
+    {
+      "id": 7,
+      "question": "关于 runAgentWithProgress 的超时传递：注意 reviewer 在 executeLoopGroup 中调用时传的是 step.timeoutMs。如果要给 reviewer 用独立超时，runAgentWithProgress 调用的第二个参数需要改。你能确认一下 reviewer 和 loopAgent 的超时分别应该是什么值吗？",
+      "options": [
+        "a[推荐] worker loopAgent=30min(1800000ms), reviewer=15min(900000ms); trimmer loopAgent=20min(1200000ms), reviewer=15min(900000ms)",
+        "b worker loopAgent=15min, reviewer=15min; trimmer loopAgent=5min, reviewer=5min — 只需要在 UI 上修正显示",
+        "c worker loopAgent=30min, reviewer=10min; trimmer loopAgent=20min, reviewer=5min"
+      ]
+    },
+    {
+      "id": 8,
+      "question": "关于超时显示在 UI 上的位置：当前 UI 在 loop-group 的 row 上显示超时（如 \"/超时时间15m\"），但 bug 描述说 \"超时时间应该交给子代理而不是 loop 组\"。你认为 loop-group 的 UI row 上还应该显示超时时间吗？还是只在子代理（worker/reviewer）的 sub-step 级别显示各自的超时？",
+      "options": [
+        "a[推荐] loop-group 行不显示超时时间，在 worker 和 reviewer 的 sub-step 中分别显示各自的超时时间",
+        "b loop-group 行仍然显示整体超时，同时子代理也显示各自的超时",
+        "c 只需修复 ui 显示错误，不在子代理级别显示超时"
+      ]
+    },
+    {
+      "id": 9,
+      "question": "关于 trimmer 默认超时 20 分钟：当前 trimmer 的 timeoutMs 是 300000 (5min)。改为 1200000 (20min) 是否合理？请确认这个改动是否会影响其他步骤的规划。",
+      "options": [
+        "a[推荐] 合理，仅改 dev-prompts.ts 中所有 trimmer 相关步骤的 timeoutMs 为 1200000",
+        "b 改为 600000 (10min) 更合理",
+        "c trimmer 不应该改超时，问题在其他地方"
+      ]
+    },
+    {
+      "id": 10,
+      "question": "关于测试验证：如果要验证修复是否有效，是否有现成的测试文件或测试框架可用？还是需要新建测试？",
+      "options": [
+        "a[推荐] 在 test/ 目录下新建测试文件，模拟 workflow engine 执行并检查 UI state 的 loopCount 和 timeoutMs",
+        "b 已有测试文件，可以扩展",
+        "c 不需要测试"
+      ]
+    }
+  ]
+}

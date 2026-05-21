@@ -381,7 +381,8 @@ const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "worker",
 		reviewAgentName: "reviewer",
 		maxLoops: 3,
-		timeoutMs: 900_000,
+		timeoutMs: 1_800_000,
+		reviewTimeoutMs: 900_000,
 	},
 	{
 		id: "trimmer-reviewer",
@@ -390,7 +391,8 @@ const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "trimmer",
 		reviewAgentName: "reviewer",
 		maxLoops: 3,
-		timeoutMs: 300_000,
+		timeoutMs: 1_200_000,
+		reviewTimeoutMs: 900_000,
 	},
 	{
 		id: "docWriter",
@@ -416,7 +418,8 @@ const FIX_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "worker",
 		reviewAgentName: "reviewer",
 		maxLoops: 3,
-		timeoutMs: 900_000,
+		timeoutMs: 1_800_000,
+		reviewTimeoutMs: 900_000,
 	},
 	{
 		id: "docWriter",
@@ -442,7 +445,8 @@ const REFACTOR_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "worker",
 		reviewAgentName: "reviewer",
 		maxLoops: 3,
-		timeoutMs: 900_000,
+		timeoutMs: 1_800_000,
+		reviewTimeoutMs: 900_000,
 	},
 	{
 		id: "trimmer-reviewer",
@@ -451,7 +455,8 @@ const REFACTOR_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "trimmer",
 		reviewAgentName: "reviewer",
 		maxLoops: 3,
-		timeoutMs: 300_000,
+		timeoutMs: 1_200_000,
+		reviewTimeoutMs: 900_000,
 	},
 ];
 
@@ -470,7 +475,8 @@ const PERF_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "worker",
 		reviewAgentName: "reviewer",
 		maxLoops: 3,
-		timeoutMs: 900_000,
+		timeoutMs: 1_800_000,
+		reviewTimeoutMs: 900_000,
 	},
 ];
 
@@ -489,7 +495,8 @@ const TEST_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "worker",
 		reviewAgentName: "reviewer",
 		maxLoops: 3,
-		timeoutMs: 900_000,
+		timeoutMs: 1_800_000,
+		reviewTimeoutMs: 900_000,
 	},
 ];
 
@@ -518,7 +525,8 @@ const STYLE_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		loopAgentName: "trimmer",
 		reviewAgentName: "reviewer",
 		maxLoops: 2,
-		timeoutMs: 300_000,
+		timeoutMs: 1_200_000,
+		reviewTimeoutMs: 900_000,
 	},
 ];
 

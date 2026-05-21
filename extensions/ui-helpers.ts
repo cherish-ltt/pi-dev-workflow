@@ -362,7 +362,7 @@ function formatDurationFull(ms: number): string {
     return `${m}m${s}s`;
 }
 
-function formatTimeout(ms: number): string {
+export function formatTimeout(ms: number): string {
     const m = Math.floor(ms / 60000);
     const s = Math.floor((ms % 60000) / 1000);
     return s > 0 ? `${m}m${s}s` : `${m}m`;
@@ -461,10 +461,9 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
         if (s.loopCount != null && s.loopCount > 0) {
             loopStr = dim(theme, ` · 第 ${s.loopCount} 次循环`);
         } else if (s.maxLoops != null) {
-            if (isRunning) {
-                // Immediately show 第 1 次循环 when loop-group starts
-                loopStr = dim(theme, ` · 第 1 次循环`);
-            } else if (isPending) {
+            // 仅在 pending 时显示"第 0 次循环"
+            // running 状态时 loopCount 应由 executeLoopGroup 通过 updateWidgetStep 更新
+            if (isPending) {
                 loopStr = dim(theme, ` · 第 0 次循环`);
             }
         }

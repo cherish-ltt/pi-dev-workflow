@@ -31,6 +31,7 @@ import {
 	updateWorkflowWidget,
 	buildWidgetState,
 	sendWorkflowResult,
+	formatTimeout,
 	setWorkflowCancelCallback,
 	cancelWorkflow,
 	BACK_MARKER,
@@ -55,6 +56,8 @@ export interface WorkflowStepDef {
 	reviewAgentName?: string;
 	maxLoops?: number;
 	timeoutMs: number;
+	/** 独立于 loopAgent 的 reviewer 超时时间（ms），默认使用 timeoutMs */
+	reviewTimeoutMs?: number;
 }
 
 interface WorkflowStepState {
@@ -778,13 +781,13 @@ function addWidgetSubStepOutput(stepIndex: number, agentName: string, output: st
 }
 
 function setWidgetSubStepStatus(stepIndex: number, agentName: string, status: WorkflowSubStepWidgetState["status"]): void {
-	const step = _widgetSteps[stepIndex];
-	if (!step) return;
-	const sub = step.subSteps?.find(s => s.agent === agentName);
-	if (sub) {
+    const step = _widgetSteps[stepIndex];
+    if (!step) return;
+    const sub = step.subSteps?.find(s => s.agent === agentName);
+    if (sub) {
 		sub.status = status;
-		refreshWidget();
-	}
+        refreshWidget();
+    }
 }
 
 function setWidgetCurrentStep(index: number): void {
@@ -929,12 +932,14 @@ async function runAgentWithProgress(
 				tools: [],
 				outputs: [],
 				startedAt: agentStartTime,
+				detail: `超时时间${formatTimeout(timeoutMs)}`,
 			});
 			refreshWidget();
 		} else {
-			// Update existing sub-step status and startedAt
+			// Update existing sub-step status, startedAt, and detail
 			existing.status = "running";
 			existing.startedAt = agentStartTime;
+			existing.detail = `超时时间${formatTimeout(timeoutMs)}`;
 			refreshWidget();
 		}
 	}
@@ -1178,8 +1183,12 @@ async function executeLoopGroup(
 	const maxLoops = step.maxLoops ?? 3;
 	let loopCount = loopCounts[step.id] ?? 0;
 	let contextPrompt = prompt;
+	const reviewTimeoutMs = step.reviewTimeoutMs ?? step.timeoutMs;
 
 	while (loopCount < maxLoops) {
+		// 每次循环开始时重置 sub-step 状态
+		setWidgetSubStepStatus(stepIndex, step.loopAgentName!,"pending");
+		setWidgetSubStepStatus(stepIndex, step.reviewAgentName!,"pending");
 		const loopStartTime = Date.now();
 
 		// Run loop agent
@@ -1227,7 +1236,7 @@ async function executeLoopGroup(
 			? contextPrompt
 			: buildReviewTask(contextPrompt, planFileRelPath, _workflowCwd);
 
-		const reviewResult = await runAgentWithProgress(reviewAgent, reviewTask, stepIndex, step.reviewAgentName!, step.timeoutMs);
+		const reviewResult = await runAgentWithProgress(reviewAgent, reviewTask, stepIndex, step.reviewAgentName!, reviewTimeoutMs);
 
 		const extractedOutput = extractFinalOutput(reviewResult.output) || reviewResult.output;
 		const combinedOutput = extractedOutput + "\n" + reviewResult.stderr;
@@ -1241,6 +1250,13 @@ async function executeLoopGroup(
 		}
 
 		loopCount++;
+		// 立即更新 UI 显示当前循环次数
+		state.loopCount = loopCount;
+		updateWidgetStep(stepIndex, step.label, "running", {
+			loopCount,
+			maxLoops: step.maxLoops,
+			startedAt: _widgetSteps[stepIndex]?.startedAt || Date.now(),
+		});
 
 		if (reviewSummary?.maxSeverity === "critical" && loopCount < maxLoops) {
 			if (mode === "full-auto") {
@@ -1402,7 +1418,11 @@ async function executeWorkflowBackground(
 		// ── Execute (timer starts NOW, after all user confirmations) ──
 		state.status = "running";
 		const stepStartTime = Date.now();
-		updateWidgetStep(currentStepIndex, step.label, "running", { timeoutMs: step.timeoutMs, maxLoops: step.maxLoops, startedAt: stepStartTime });
+		updateWidgetStep(currentStepIndex, step.label, "running", {
+			timeoutMs: step.type === "loop-group" ? undefined : step.timeoutMs,
+			maxLoops: step.maxLoops,
+			startedAt: stepStartTime,
+		});
 
 		try {
 			if (step.type === "loop-group") {
@@ -1419,7 +1439,7 @@ async function executeWorkflowBackground(
 				durationMs: state.durationMs,
 				loopCount: state.loopCount,
 				maxLoops: step.maxLoops,
-				timeoutMs: step.timeoutMs,
+				timeoutMs: step.type === "loop-group" ? undefined : step.timeoutMs,
 			});
 		} catch (err) {
 			state.status = "failed";
@@ -1617,7 +1637,7 @@ export async function runWorkflow(
 		const isDoneState = stepStates[i]?.status === "done";
 		updateWidgetStep(i, steps[i]!.label, isDoneState ? "done" : "pending", {
 			maxLoops: steps[i]!.maxLoops,
-			timeoutMs: steps[i]!.timeoutMs,
+			timeoutMs: steps[i]!.type === "loop-group" ? undefined : steps[i]!.timeoutMs,
 		});
 		// Pre-populate sub-steps for all steps (shows queued agents)
 		populatePredefinedSubSteps(i);
