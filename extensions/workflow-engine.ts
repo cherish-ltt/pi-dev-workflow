@@ -294,25 +294,28 @@ function getGitDiffChanges(cwd: string): GitFileChange[] {
 
 	try {
 		// 1. `git diff --name-status` — shows modified (M) and deleted (D) vs HEAD
+		// Format: "M\tpath/to/file" (tab-separated) or "M       path/to/file" (spaces)
 		const diffOutput = execSync("git diff --name-status", { cwd, encoding: "utf8", timeout: 5000 }).trim();
 		if (diffOutput) {
 			for (const line of diffOutput.split("\n")) {
 				const trimmed = line.trim();
 				if (!trimmed) continue;
-				// Format: "M\tpath/to/file" or "D\tpath/to/file"
-				const match = trimmed.match(/^([MAD])\s+(.+)$/);
-				if (match) {
-					const status = match[1]! as "M" | "A" | "D";
-					const path = match[2]!.trim();
-					if (path && !seen.has(path)) {
-						seen.add(path);
-						changes.push({ status, path });
+				// git diff --name-status output format: X\tfilepath\n
+				// Split by tab, X is status char, filepath is the rest
+				const parts = trimmed.split("\t");
+				if (parts.length === 2) {
+					const status = parts[0]!.trim();
+					const filePath = parts[1]!.trim();
+					if (filePath && !seen.has(filePath) && (status === "M" || status === "A" || status === "D")) {
+						seen.add(filePath);
+						changes.push({ status: status as "M" | "A" | "D", path: filePath });
 					}
 				}
 			}
 		}
 
 		// 2. `git status --porcelain` — find untracked files (??) missing from git diff
+		// Format: "XY filepath" (e.g., " M .gitignore", "?? newfile.ts", "A  filepath")
 		const statusOutput = execSync("git status --porcelain", { cwd, encoding: "utf8", timeout: 5000 }).trim();
 		if (statusOutput) {
 			for (const line of statusOutput.split("\n")) {
@@ -320,13 +323,12 @@ function getGitDiffChanges(cwd: string): GitFileChange[] {
 				if (!trimmed) continue;
 				// "?? path" means untracked/new
 				// Also catch "A  path" for staged new files
-				const match = trimmed.match(/^(\?\?|A\s)\s+(.+)$/);
-				if (match) {
-					const path = match[2]!.trim();
-					if (path && !seen.has(path)) {
-						seen.add(path);
-						changes.push({ status: "A", path });
-					}
+				// git status --porcelain: first 2 chars are status, then space(s), then path
+				const statusPrefix = trimmed.slice(0, 2); // e.g., "??", " M", "A "
+				const filePath = trimmed.slice(3).trim(); // after "?? " or " M " etc.
+				if (filePath && !seen.has(filePath) && (statusPrefix === "??" || statusPrefix === "A " || statusPrefix.startsWith("A"))) {
+					seen.add(filePath);
+					changes.push({ status: "A", path: filePath });
 				}
 			}
 		}
@@ -1187,8 +1189,8 @@ async function executeLoopGroup(
 
 	while (loopCount < maxLoops) {
 		// 每次循环开始时重置 sub-step 状态
-		setWidgetSubStepStatus(stepIndex, step.loopAgentName!,"pending");
-		setWidgetSubStepStatus(stepIndex, step.reviewAgentName!,"pending");
+		setWidgetSubStepStatus(stepIndex, step.loopAgentName!, "pending");
+		setWidgetSubStepStatus(stepIndex, step.reviewAgentName!, "pending");
 		const loopStartTime = Date.now();
 
 		// Run loop agent

@@ -485,9 +485,11 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
         if (s.loopCount != null && s.loopCount > 0) {
             loopStr = dim(theme, ` · 第 ${s.loopCount} 次循环`);
         } else if (s.maxLoops != null) {
-            // 仅在 pending 时显示"第 0 次循环"
-            // running 状态时 loopCount 应由 executeLoopGroup 通过 updateWidgetStep 更新
-            if (isPending) {
+            if (isRunning) {
+                // 当 loop-group 开始运行时，即使 loopCount 尚未通过 updateWidgetStep 设置，
+                // 也显示"第 1 次循环"（第 0 次循环仅用于 pending 状态）
+                loopStr = dim(theme, ` · 第 1 次循环`);
+            } else if (isPending) {
                 loopStr = dim(theme, ` · 第 0 次循环`);
             }
         }
@@ -539,9 +541,32 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                       ? theme.fg("accent", spinnerFrame())
                       : dim(theme, "◦");
 
-                // Agent line: "        |__ ✓ worker ·"
+                // Agent line: "        |__ ✓ worker · (52.6s/超时时间60m)"
+                // Build inline duration and timeout info for sub-step
+                let subDurStr = "";
+                let subTimeoutStr = "";
+                let subDurClose = "";
+                let elapsedMs: number | undefined;
+                if (sub.startedAt) {
+                    elapsedMs = Date.now() - sub.startedAt;
+                } else if (sub.durationMs != null) {
+                    elapsedMs = sub.durationMs;
+                }
+                if (elapsedMs != null) {
+                    subDurStr = dim(theme, ` (${formatDurationFull(elapsedMs)}`);
+                } else if (isSubRunning) {
+                    subDurStr = dim(theme, ` (0s`);
+                }
+                // Extract timeout info from sub.detail (e.g. "超时时间60m")
+                // detail is set in runAgentWithProgress as `超时时间${formatTimeout(timeoutMs)}`
+                if (sub.detail && sub.detail.includes("超时时间")) {
+                    subTimeoutStr = dim(theme, `/${sub.detail}`);
+                }
+                if (subDurStr) {
+                    subDurClose = dim(theme, ")");
+                }
                 const agentConnector = dim(theme, "|__");
-                lines.push(`${agentIndent}${agentConnector} ${subIcon} ${sub.agent} ·`);
+                lines.push(`${agentIndent}${agentConnector} ${subIcon} ${sub.agent} ·${subDurStr}${subTimeoutStr}${subDurClose}`);
 
                 // ── Children (tools, outputs, or "正在排队") ──
                 const childItems: string[] = [];
@@ -559,7 +584,7 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                             childItems.push(`output:${o}`);
                         }
                     }
-                    if (childItems.length === 0 && sub.detail) {
+                    if (childItems.length === 0 && sub.detail && !sub.detail.includes("超时时间")) {
                         childItems.push(sub.detail);
                     }
                 }

@@ -1,0 +1,708 @@
+{
+  "version": 2,
+  "createdAt": "2026-05-21T12:59:04.215Z",
+  "updatedAt": "2026-05-21T13:23:35.806Z",
+  "prompt": "[fix] 修复 当前目录 中的 问题： 1.commit提交哈希：01413c9edb1dee3af525bfabdb4f55de7f0a3b4b里面的改动， 现在的超时时间显示位置： ``` ▶ ⠏ 🔧 修复代码 → 审查 (52.6s)           |__ ⠏ worker ·               |__ 超时时间60m ``` 2.问题2,`第 0 次循环`只在排队时候显示了，等loop组开始工作连`第 1 次循环`的提示都不见了 2.根据git diff --name-status获取的文件变动信息，是通过正则筛选的，但很明显git diff --name-status给的结果如下： ```git diff --name-statusM       .gitignoreM       Cargo.lock ``` 非常的规整，正则现在会识别出来一些无关东西，判断不出来是哪里来的，git diff --name-status直接拿到的信息`X 空格 filepath 换行`只需要简单的string处理即可，无需复杂正则，而且正则效果不好。\n\n**背景**：\n- 输入：见代码上下文\n- 预期行为：预期： 1.超时时间显示位置： ``` ▶ ⠏ 🔧 修复代码 → 审查           |__ ⠏ worker · (52.6s/超时时间60m )           |__ reviewer · (0s/超时时间60m） ``` 超时时间应该跟在计时的后面(当前计时/超时时间xm)，且位于子代理名称后面 2.恢复`第 x 次循环`的显示，上次fix的模板是x计数不更新，但是修改后直接导致`第 x 次循环`不见了，恢复显示并修复x计数和更新ui逻辑。 3.将正则匹配改成普通的string处理 3.严格完成以上任务要求，不得破坏原有其他功能，不得偷懒省略，以最小改动实现。\n- 当前错误：请描述当前错误\n**任务**：\n1. 不要仅仅消除报错（Suppress），要解决根本原因。\n2. 先读取相关代码和日志，诊断根因（多步推理，不要先给结论）。\n3. 提供至少一种修复方案，并说明为什么这样做。\n4. 编写测试用例复现该 Bug 并确认修复有效。\n**输出**：提供 diff 和两句话的根因分析。\n**约束**：只修 bug，不做重构；最小化改动；不要假设错误是微不足道的。",
+  "mode": "attended",
+  "steps": [
+    {
+      "status": "done",
+      "durationMs": 94547
+    },
+    {
+      "status": "done",
+      "loopCount": 3,
+      "durationMs": 1019319
+    }
+  ],
+  "currentStepIndex": 1,
+  "loopCounts": {
+    "worker-reviewer": 3
+  },
+  "planFilePath": ".pi-dev-output/pi-plans/20260521-230000-fix-timeout-display-loopcount-gitdiff.md",
+  "taskSummary": "fix - 修复 当前目录 中的 问题： 1.commit提交哈希：01413c9edb1dee3af525bfabdb4f55de7f0a3b4b里面的改动， 现在的超时时间显示位置： ``` ▶ ⠏ 🔧 修复代码 → 审查 (52.6s)           |__ ⠏ worker ·               |__ 超时时间60m ``` 2.问题2,`第 0 次循环`只在排队时候显示了，等loop组开始工作连`第 1 次循环`的提示都不见了 2.根据git diff --name-status获取的文件变动信息，是通过正则筛选的，但很明显git diff --name-status给的结果如下： ```git diff --name-statusM       .gitignoreM       Cargo.lock ``` 非常的规整，正则现在会识别出来一些无关东西，判断不出来是哪里来的，git diff --name-status直接拿到的信息`X 空格 filepath 换行`只需要简单的string处理即可，无需复杂正则，而且正则效果不好。",
+  "workflowType": "自定义",
+  "fileChanges": [
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "type": "new",
+      "filePath": ".pi-dev-output/pi-workflow/checkpoint-archive-mpfhyxc5.json",
+      "timestamp": "2026-05-21T12:59:04.213Z"
+    },
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "type": "new",
+      "filePath": ".pi-dev-output/pi-workflow/checkpoint-archive-mpfi382e.json",
+      "timestamp": "2026-05-21T13:02:24.733Z"
+    },
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "type": "edit",
+      "filePath": "${fileChanges.edits",
+      "timestamp": "2026-05-21T13:05:58.208Z"
+    },
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "type": "delete",
+      "filePath": "${fileChanges.deletes",
+      "timestamp": "2026-05-21T13:05:58.209Z"
+    },
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "type": "new",
+      "filePath": ".pi-dev-output/pi-plans/20260521-230000-fix-timeout-display-loopcount-gitdiff.md",
+      "timestamp": "2026-05-21T13:05:58.254Z"
+    },
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "type": "new",
+      "filePath": ".pi-dev-output/pi-workflow/checkpoint.json",
+      "timestamp": "2026-05-21T13:05:58.281Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "代码xxx.rs\\\\n",
+      "timestamp": "2026-05-21T13:07:19.111Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "代码xxx.rs\\n",
+      "timestamp": "2026-05-21T13:07:20.571Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": "代码xxx.ts\\n",
+      "timestamp": "2026-05-21T13:07:29.389Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "src/ma",
+      "timestamp": "2026-05-21T13:07:29.517Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "config.json\\\")",
+      "timestamp": "2026-05-21T13:07:30.986Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "src/main.rs\\\",",
+      "timestamp": "2026-05-21T13:07:30.992Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "src/main.rs\\\\\\\",",
+      "timestamp": "2026-05-21T13:07:34.020Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": "代码xxx.ts\\\\n",
+      "timestamp": "2026-05-21T13:07:34.028Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "path\\\\\\\",",
+      "timestamp": "2026-05-21T13:07:40.080Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "\\\\\\\\s*(.+)/i);\\\\n",
+      "timestamp": "2026-05-21T13:07:40.143Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "/new:/delete:",
+      "timestamp": "2026-05-21T13:07:40.206Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "delete",
+      "filePath": "path\\\\\\\"\\\\n",
+      "timestamp": "2026-05-21T13:07:40.206Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": "path\\\\\\\",",
+      "timestamp": "2026-05-21T13:07:40.218Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "/new:/delet",
+      "timestamp": "2026-05-21T13:07:40.250Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "delete",
+      "filePath": "\\\\\\\\s*(.+)/i);\\\\n",
+      "timestamp": "2026-05-21T13:07:41.318Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": "\\\\\\\\s*(.+)/i);\\\\n",
+      "timestamp": "2026-05-21T13:07:41.338Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "config.json\\\\\\\")",
+      "timestamp": "2026-05-21T13:07:42.084Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "path\\\",",
+      "timestamp": "2026-05-21T13:07:42.107Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "delete",
+      "filePath": "\\\\s*(.+)/i);\\n",
+      "timestamp": "2026-05-21T13:07:42.340Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": "path\\\",",
+      "timestamp": "2026-05-21T13:07:42.428Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "M\\\\t.gitignore",
+      "timestamp": "2026-05-21T13:10:57.486Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "extensions/ui-helpers.ts",
+      "timestamp": "2026-05-21T13:10:57.486Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "extensions/workflow-engine.ts",
+      "timestamp": "2026-05-21T13:10:57.486Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "step.type",
+      "timestamp": "2026-05-21T13:10:57.486Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "s.loopCount",
+      "timestamp": "2026-05-21T13:10:57.486Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "ui-helpers.ts",
+      "timestamp": "2026-05-21T13:10:57.486Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "workflow-engine.ts",
+      "timestamp": "2026-05-21T13:10:57.486Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "sub.detail",
+      "timestamp": "2026-05-21T13:10:57.486Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "checkpoint-${planId}.json",
+      "timestamp": "2026-05-21T13:10:57.487Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "src/main.rs",
+      "timestamp": "2026-05-21T13:10:57.487Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "path/to/file.ts",
+      "timestamp": "2026-05-21T13:10:57.487Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "file.ts",
+      "timestamp": "2026-05-21T13:10:57.487Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "delete",
+      "filePath": "file\\n",
+      "timestamp": "2026-05-21T13:10:57.489Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": "file\\n\\t\\t\\t\\t\\ttry",
+      "timestamp": "2026-05-21T13:10:57.489Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "${fileChanges.edits",
+      "timestamp": "2026-05-21T13:10:57.490Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "delete",
+      "filePath": "${fileChanges.deletes",
+      "timestamp": "2026-05-21T13:10:57.490Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "[],\\\\n",
+      "timestamp": "2026-05-21T13:12:44.459Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "M\\\\t.gitignore",
+      "timestamp": "2026-05-21T13:12:47.970Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "extensions/ui-helpers.ts",
+      "timestamp": "2026-05-21T13:12:47.970Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "extensions/workflow-engine.ts",
+      "timestamp": "2026-05-21T13:12:47.970Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "step.type",
+      "timestamp": "2026-05-21T13:12:47.970Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "s.loopCount",
+      "timestamp": "2026-05-21T13:12:47.970Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "ui-helpers.ts",
+      "timestamp": "2026-05-21T13:12:47.970Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "workflow-engine.ts",
+      "timestamp": "2026-05-21T13:12:47.971Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "sub.detail",
+      "timestamp": "2026-05-21T13:12:47.971Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "step.timeoutMs",
+      "timestamp": "2026-05-21T13:12:47.972Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "dev-prompts.ts",
+      "timestamp": "2026-05-21T13:12:47.972Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "extensions/dev-prompts.ts",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "tests/test-loopcount-timeout-fix.mjs",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "step.startTime",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "s.timeoutMs",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "test-loopcount-timeout-fix.mjs",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "test-workflow-engine.mjs",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "test-workflow-engine-bugs.mjs",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "WORKFLOW_SUB_STEP_WIDGET_STATE.detail",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "tests/test-workflow-engine-bugs.mjs",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "tests/test-workflow-engine.mjs",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "sub.status",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "sub.tools",
+      "timestamp": "2026-05-21T13:12:47.973Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "sub.outputs",
+      "timestamp": "2026-05-21T13:12:47.974Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": ".pi-dev-output/pi-review/md/review-20260521-235500.md",
+      "timestamp": "2026-05-21T13:12:48.035Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "\\\\s*(.+)/i);\\n",
+      "timestamp": "2026-05-21T13:15:12.853Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": "\\\\s*(.+)/i);\\n",
+      "timestamp": "2026-05-21T13:15:13.096Z"
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "path\\",
+      "timestamp": "2026-05-21T13:15:14.515Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "checkpoint-${planId}.json",
+      "timestamp": "2026-05-21T13:18:49.227Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "src/main.rs",
+      "timestamp": "2026-05-21T13:18:49.227Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "path/to/file.ts",
+      "timestamp": "2026-05-21T13:18:49.227Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "file.ts",
+      "timestamp": "2026-05-21T13:18:49.227Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "delete",
+      "filePath": "file\\n",
+      "timestamp": "2026-05-21T13:18:49.230Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": "file\\n\\t\\t\\t\\t\\ttry",
+      "timestamp": "2026-05-21T13:18:49.230Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "${fileChanges.edits",
+      "timestamp": "2026-05-21T13:18:49.232Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "delete",
+      "filePath": "${fileChanges.deletes",
+      "timestamp": "2026-05-21T13:18:49.232Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": ".pi-dev-output/pi-review/md/review-20260521-204500.md",
+      "timestamp": "2026-05-21T13:18:49.264Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "[],\\n\\t\\t\\toutputs:",
+      "timestamp": "2026-05-21T13:23:35.675Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "edit",
+      "filePath": "[],\\n",
+      "timestamp": "2026-05-21T13:23:35.676Z"
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "type": "new",
+      "filePath": ".pi-dev-output/pi-review/md/review-20260521-234500.md",
+      "timestamp": "2026-05-21T13:23:35.779Z"
+    }
+  ],
+  "subAgentRuns": 9,
+  "filesModified": 59,
+  "filesCreated": 15,
+  "agentRunHistory": [
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "startedAt": "2026-05-21T12:58:31.215Z",
+      "durationMs": 32941,
+      "exitCode": 143,
+      "toolCount": 0
+    },
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "startedAt": "2026-05-21T13:02:09.425Z",
+      "durationMs": 15259,
+      "exitCode": 143,
+      "toolCount": 0
+    },
+    {
+      "agent": "planner",
+      "stepIndex": 0,
+      "startedAt": "2026-05-21T13:04:23.734Z",
+      "durationMs": 94463,
+      "exitCode": 0,
+      "toolCount": 0
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "startedAt": "2026-05-21T13:06:36.487Z",
+      "durationMs": 260996,
+      "exitCode": 0,
+      "toolCount": 103
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "startedAt": "2026-05-21T13:10:57.522Z",
+      "durationMs": 110443,
+      "exitCode": 0,
+      "toolCount": 127
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "startedAt": "2026-05-21T13:13:13.858Z",
+      "durationMs": 271830,
+      "exitCode": 0,
+      "toolCount": 235
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "startedAt": "2026-05-21T13:17:45.747Z",
+      "durationMs": 63476,
+      "exitCode": 0,
+      "toolCount": 251
+    },
+    {
+      "agent": "worker",
+      "stepIndex": 1,
+      "startedAt": "2026-05-21T13:19:44.341Z",
+      "durationMs": 129616,
+      "exitCode": 0,
+      "toolCount": 268
+    },
+    {
+      "agent": "reviewer",
+      "stepIndex": 1,
+      "startedAt": "2026-05-21T13:21:54.030Z",
+      "durationMs": 101693,
+      "exitCode": 0,
+      "toolCount": 286
+    }
+  ],
+  "baseline": [
+    {
+      "path": ".pi-dev-output/pi-grill/answers/answer-mpfhy5x2-20260521-2058.md",
+      "hash": "609a8f2ace3d8a0d2ead3b31cb1027223c819336"
+    },
+    {
+      "path": ".pi-dev-output/pi-grill/answers/answer-mpfi2th1-20260521-2102.md",
+      "hash": "e8cd2855d32632a6486d8c793af320ed6cd74835"
+    },
+    {
+      "path": ".pi-dev-output/pi-grill/answers/answer-mpfi5q4c-20260521-2104.md",
+      "hash": "8d42e17199f7066e827124fce4cb47d9ce2ec567"
+    },
+    {
+      "path": ".pi-dev-output/pi-workflow/checkpoint-archive-mpfhyxc5.json",
+      "hash": "9041bd1be486c6141080e623760514026c6b409b"
+    },
+    {
+      "path": ".pi-dev-output/pi-workflow/checkpoint-archive-mpfi2unc.json",
+      "hash": "72c8520e2d0784be27b4482b03895f82c1239a89"
+    },
+    {
+      "path": ".pi-dev-output/pi-workflow/checkpoint-archive-mpfi382e.json",
+      "hash": "326fb5e3a815b6d9142248cb244d6e193bfdd5d4"
+    },
+    {
+      "path": ".pi-dev-output/pi-workflow/checkpoint-archive-mpfi5r22.json",
+      "hash": "be8ed431257bc7058bc1377845b9164fd510ba6a"
+    }
+  ]
+}
