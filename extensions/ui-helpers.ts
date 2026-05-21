@@ -205,9 +205,14 @@ export function uiConfirm(
 // ── Input (replaces ctx.ui.input) ────────────────────────────
 
 /**
- * Show an input dialog with proper wrapping.
+ * Show an input dialog with proper wrapping and live preview.
+ *
+ * Features:
+ *   - 实时换行预览：输入框上方显示完整的换行预览（跟随输入实时更新）
+ *   - 方向键 ←/→ 可正常移动光标编辑已有内容
+ *
  * Returns the entered string, or BACK_MARKER on back, or undefined on cancel.
- * When backable=true, supports ← for back, Ctrl+Shift+← for back, and Ctrl+Shift+→ for submit+next.
+ * When backable=true, supports Ctrl+Shift+← for back and Ctrl+Shift+→ for submit+next.
  */
 export function uiInput(
     ctx: ExtensionCommandContext,
@@ -260,11 +265,6 @@ export function uiInput(
             render: (w) => container.render(w),
             invalidate: () => container.invalidate(),
             handleInput: (data) => {
-                // 左方向键 → 返回（优先于 Input 的光标左移）
-                if (backable && matchesKey(data, Key.left)) {
-                    done(BACK_MARKER);
-                    return;
-                }
 
                 // Intercept back/next keys before passing to Input
                 if (backable) {

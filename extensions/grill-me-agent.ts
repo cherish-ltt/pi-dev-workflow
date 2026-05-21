@@ -592,7 +592,14 @@ export async function runGrillPhase(
 	};
 }
 
-/** Show a single grill question as TUI SelectList + custom input option. */
+/**
+ * Show a single grill question as TUI SelectList with option items and custom input entry.
+ *
+ * Navigation:
+ *   - ↑↓ 选择, Enter 确认, Esc 取消全部评审
+ *   - Ctrl+Shift+← 返回上一题（仅当 backable=true 且 currentIndex > 1 时生效）
+ *   - 选择 "✏️ 自定义输入" 进入文本输入模式
+ */
 async function showQuestionTUI(
 	ctx: ExtensionCommandContext,
 	q: GrillQuestion,
@@ -657,7 +664,7 @@ async function showQuestionTUI(
 
 		container.addChild(new Spacer(1));
 		const hint = backable && currentIndex > 1
-			? "  ↑↓ 导航 • Enter 选择 • ← 返回上一题 • Esc 取消全部评审"
+			? "  ↑↓ 导航 • Enter 选择 • Ctrl+Shift+← 返回上一题 • Esc 取消全部评审"
 			: "  ↑↓ 导航 • Enter 选择 • Esc 取消全部评审";
 		container.addChild(
 			new Text(theme.fg("dim", hint), 0, 0),
@@ -668,8 +675,8 @@ async function showQuestionTUI(
 			render: (w) => container.render(w),
 			invalidate: () => container.invalidate(),
 			handleInput: (data) => {
-				// 左方向键 → 返回上一题（SelectList 不处理 left 键，需自行拦截）
-				if (backable && currentIndex > 1 && matchesKey(data, Key.left)) {
+				// Ctrl+Shift+← → 返回上一题（SelectList 不处理该键，需自行拦截）
+				if (backable && currentIndex > 1 && matchesKey(data, Key.ctrlShift("left"))) {
 					done("__BACK__");
 					return;
 				}
