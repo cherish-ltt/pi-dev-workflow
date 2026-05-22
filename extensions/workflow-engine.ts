@@ -20,7 +20,41 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
+
+/**
+ * Generate a UUID v7 (time-ordered) string.
+ * Format: tttttttt-tttt-7xxx-yxxx-xxxxxxxxxxxx
+ * - t = Unix timestamp (ms) as 48-bit big-endian
+ * - 7 = version (0111)
+ * - y = variant (10xx = 8, 9, a, b)
+ * - x = random
+ */
+function uuidv7(): string {
+	const ts = BigInt(Date.now());
+	const buf = new Uint8Array(16);
+	// 48-bit timestamp (big-endian) in bytes 0-5
+	buf[0] = Number((ts >> 40n) & 0xFFn);
+	buf[1] = Number((ts >> 32n) & 0xFFn);
+	buf[2] = Number((ts >> 24n) & 0xFFn);
+	buf[3] = Number((ts >> 16n) & 0xFFn);
+	buf[4] = Number((ts >> 8n) & 0xFFn);
+	buf[5] = Number(ts & 0xFFn);
+	// 10 random bytes for version/variant/rand
+	const r = randomBytes(10);
+	// Byte 6: version (0111) | rand_a high 4 bits
+	buf[6] = 0x70 | (r[0] >> 4);
+	// Byte 7: rand_a low 8 bits
+	buf[7] = (r[0] << 4) | (r[1] >> 4);
+	// Byte 8: variant (10) | rand_b high 6 bits
+	buf[8] = 0x80 | (r[2] >> 2);
+	// Bytes 9-15: remaining rand_b (56 bits)
+	buf[9] = r[3]; buf[10] = r[4]; buf[11] = r[5];
+	buf[12] = r[6]; buf[13] = r[7]; buf[14] = r[8]; buf[15] = r[9];
+	// Format as 8-4-4-4-12 hex UUID
+	const hex = Array.from(buf, b => b.toString(16).padStart(2, '0')).join('');
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { execSync } from "child_process";
@@ -1877,7 +1911,7 @@ export async function runWorkflow(
 	_workflowAgentRunHistory = existingCp?.agentRunHistory ? [...existingCp.agentRunHistory] : [];
 
 	// Initialize or restore workflow UUID
-	_workflowId = existingCp?.workflowId ?? randomUUID();
+	_workflowId = existingCp?.workflowId ?? uuidv7();
 
 	// Reset chain context for new workflow session
 	resetChainContext();
