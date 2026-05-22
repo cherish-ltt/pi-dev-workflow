@@ -230,6 +230,8 @@ export interface SubagentArgs {
 	appendSystemPrompt?: string;
 	/** Extra raw CLI args (appended last, highest priority) */
 	extraArgs?: string[];
+	/** Workflow UUID to include in session name for cross-workflow traceability */
+	workflowId?: string;
 }
 
 function inferTimeout(name: string): number {
@@ -380,7 +382,8 @@ export async function spawnSubagent(
 		const sessionDir = finalSessionDir || ".pi-dev-output/pi-subagent-sessions";
 		const safeAgentName = agent.name.replace(/[^a-zA-Z0-9_-]/g, "_");
 		const ts = new Date().toISOString().replace(/[:.]/g, "-");
-		const sessionName = `${ts}_${safeAgentName}`;
+		const wfSuffix = override.workflowId ? `_${override.workflowId}` : "";
+		const sessionName = `${ts}_${safeAgentName}${wfSuffix}`;
 		args.push("--session-dir", sessionDir);
 		args.push("--session", sessionName);
 	}

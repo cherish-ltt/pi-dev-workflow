@@ -357,6 +357,8 @@ export interface WorkflowWidgetState {
     updatedAt: string;
     /** Human-readable task summary shown in widget header, e.g. "[feat - 在 auth 中实现登录]" */
     taskSummary?: string;
+    /** Workflow UUID for cross-file traceability */
+    workflowId?: string;
 }
 
 // ── Widget component builder ─────────────────────────────────
@@ -440,6 +442,9 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                 ? theme.fg("error", "✗")
                 : theme.fg("warning", "■");
     lines.push(`${glyph} 工作流 · ${dim(theme, modeLabel)} · ${dim(theme, formatDurationFull(elapsed))}`);
+    if (state.workflowId) {
+        lines.push(`   ${dim(theme, `UUID: ${state.workflowId}`)}`);
+    }
 
     // ── Step list ──
     for (let i = 0; i < state.steps.length; i++) {
@@ -1000,6 +1005,7 @@ export function sendWorkflowResult(
         `[${taskSummary}]`,
         "",
         `${resultIcon} **工作流${statusText}** (${totalDur})`,
+        state.workflowId ? `工作流 UUID: \`${state.workflowId}\`` : "",
         "",
         stepSummaryParts.join("\n"),
         "",
@@ -1047,6 +1053,7 @@ export function buildWidgetState(
     status: WorkflowWidgetState["status"],
     extra?: { toolCount?: number; tokenCount?: number },
     taskSummary?: string,
+    workflowId?: string,
 ): WorkflowWidgetState {
     return {
         mode,
@@ -1058,6 +1065,7 @@ export function buildWidgetState(
         toolCount: extra?.toolCount,
         tokenCount: extra?.tokenCount,
         taskSummary,
+        workflowId,
     };
 }
 

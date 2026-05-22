@@ -30,7 +30,8 @@ extra-args:
    - **低优先级（low）**：代码风格、命名建议、注释改进、结构微调
 5. **输出审查报告**：
    - 将详细报告写入 `.pi-dev-output/pi-review/md/` 目录
-   - 文件名格式：`review-<YYYYMMDD-HHmmss>.md`
+   - 文件名格式：`review-<YYYYMMDD-HHmmss>-<工作流UUID>.md`
+   - 工作流 UUID 由 task prompt 中的 `## 工作流信息` 提供，附加在文件名末尾
 
 ## 额外可用工具
 
