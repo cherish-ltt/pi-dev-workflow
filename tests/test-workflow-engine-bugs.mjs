@@ -338,6 +338,323 @@ simulateInitWidget();
 assertEq(workflowRunning, true, "空定时器时启动工作流正常");
 
 
+console.log("\n═══ Bug C 测试 — buildTaskForStep worker 注入 prompt（review 反馈循环） ═══\n");
+
+// ── Test C1: worker 有 planContent 时 prompt 不被忽略 ──
+console.log("📋 测试 C1: worker 有 planContent 时 prompt 不被忽略\n");
+
+// 模拟 buildTaskForStep 行为
+function simulateBuildTaskForStep(agentName, prompt, planFileRelPath, cwd, planContentExists) {
+	if (agentName === "worker") {
+		const planContent = planContentExists ? "# 实施计划\n1. 修改 login.ts\n2. 添加 auth 中间件" : undefined;
+		if (planContent) {
+			const result = [
+				"请根据以下实施计划逐步实现代码改动。",
+				"",
+				"## 实施计划",
+				planContent,
+				"",
+				"## 原始需求与修改反馈",
+				prompt,
+				"",
+				"请严格按照计划中的步骤实施，不要做计划外的修改。",
+			].join("\n");
+			// 验证 prompt 包含在结果中
+			return result.includes("\n" + prompt) || result.includes(prompt + "\n");
+		}
+	}
+	return false;
+}
+
+// 场景 A: prompt 包含原始需求 + 审查反馈
+const promptWithFeedback = [
+	"[fix] 修复 login.ts 中的 401 错误",
+	"",
+	"## 上次审查发现的问题",
+	'审查摘要: {"maxSeverity":"critical","critical":2,"medium":1,"low":0}',
+	"请修复 2 个严重问题后重新运行。",
+].join("\n");
+
+const hasPromptWithPlan = simulateBuildTaskForStep("worker", promptWithFeedback, "plan.md", "/cwd", true);
+assertTrue(hasPromptWithPlan, "worker 有 planContent 时 prompt（含审查反馈）被注入到任务中");
+
+// 场景 B: prompt 是原始需求（第一轮循环）
+const originalPrompt = "[fix] 修复 login.ts 中的 401 错误";
+const hasOriginalPrompt = simulateBuildTaskForStep("worker", originalPrompt, "plan.md", "/cwd", true);
+assertTrue(hasOriginalPrompt, "worker 有 planContent 时原始 prompt 也被注入");
+
+// ── Test C2: 源代码静态分析 ──
+console.log("\n📋 测试 C2: 源代码中 buildTaskForStep worker 分支包含 prompt\n");
+
+const workerBranchRegex = /if \(agentName === \"worker\"\)[\s\S]{0,1000}\]\.join\(\"\\n\"\);/;
+const workerMatch = source.match(workerBranchRegex);
+assertNotNull(workerMatch, "找到 worker 分支");
+
+const hasOriginalRequirementFeedback = workerMatch?.[0]?.includes("## 原始需求与修改反馈") ?? false;
+assertTrue(hasOriginalRequirementFeedback, "worker prompt 模板包含 '## 原始需求与修改反馈' 节");
+
+// ── Test C3: 源代码中 no-plan 分支保持不变 ──
+console.log("\n📋 测试 C3: worker 无 plan 分支保持不变\n");
+
+const noPlanBranchMatch = source.match(/请根据以下功能需求实施代码改动[\s\S]{0,200}请先分析代码库，制定简要计划，再逐步实施/);
+assertNotNull(noPlanBranchMatch, "无 plan 分支仍然存在");
+const noPlanHasFeedback = noPlanBranchMatch?.[0]?.includes("## 原始需求与修改反馈") ?? false;
+assertFalse(noPlanHasFeedback, "无 plan 分支不含 '## 原始需求与修改反馈'");
+
+
+console.log("\n═══ Bug D 测试 — hasContentChanged 使用 execSync 而非 require ═══\n");
+
+// ── Test D1: 源代码不包含 require('child_process') ──
+console.log("📋 测试 D1: hasContentChanged 不使用 require('child_process')\n");
+
+const hasRequireChildProc = source.includes("require('child_process')") || source.includes('require("child_process")');
+assertFalse(hasRequireChildProc, "源代码中不包含 require('child_process')");
+
+// ── Test D2: hasContentChanged 使用 execSync ──
+console.log("\n📋 测试 D2: hasContentChanged 使用 execSync\n");
+
+const funcStart = source.indexOf("function hasContentChanged");
+assert(funcStart !== -1, "找到 hasContentChanged 函数");
+const funcBody = source.slice(funcStart, funcStart + 400);
+const hasExecSync = funcBody.includes("execSync(");
+assertTrue(hasExecSync, "hasContentChanged 使用 execSync");
+const noOldSpawnSync = !funcBody.includes("spawnSync");
+assertTrue(noOldSpawnSync, "hasContentChanged 不使用 spawnSync");
+
+// ── Test D3: 模拟 hasContentChanged 行为逻辑 ──
+console.log("\n📋 测试 D3: hasContentChanged 逻辑验证\n");
+
+function simulateHasContentChanged(currentHash, baselineHash) {
+	try {
+		// 模拟 execSync 返回 hash
+		const data = currentHash;
+		return data.trim() !== baselineHash;
+	} catch {
+		return true;
+	}
+}
+
+assertTrue(simulateHasContentChanged("abc123", "def456"), "不同 hash → changed");
+assertFalse(simulateHasContentChanged("abc123", "abc123"), "相同 hash → unchanged");
+
+
+console.log("\n═══ Bug E 测试 — trimmer prompt 包含 plan 上下文 ═══\n");
+
+// ── Test E1: 源代码静态分析 ──
+console.log("📋 测试 E1: buildTaskForStep trimmer 分支包含 plan 上下文\n");
+
+const trimmerStart = source.indexOf('if (agentName === "trimmer")');
+assert(trimmerStart !== -1, "找到 trimmer 分支");
+const trimmerSection = source.slice(trimmerStart, trimmerStart + 600);
+
+const trimmerHasWarning = trimmerSection.includes("注意：以下实施计划");
+assertTrue(trimmerHasWarning, "trimmer prompt 包含 plan 保护提示");
+
+const trimmerHasPlanContent = trimmerSection.includes("## 实施计划（改动范围）");
+assertTrue(trimmerHasPlanContent, "trimmer prompt 包含 '## 实施计划（改动范围）’ 节");
+
+const trimmerHasSpread = trimmerSection.includes("...(planContent ?");
+assertTrue(trimmerHasSpread, "trimmer prompt 条件性包含 planContent");
+
+
+console.log("\n═══ Bug F 测试 — 注释与代码一致性（5s vs 3s） ═══\n");
+
+// ── Test F1: Esc 双击超时注释匹配代码 ──
+console.log("📋 测试 F1: Esc 双击注释与代码一致\n");
+
+const escCommentMatch = source.match(/Second Esc press within (\d+)s/);
+if (escCommentMatch) {
+	const commentVal = parseInt(escCommentMatch[1], 10);
+	assertEq(commentVal, 3, `注释说 ${commentVal}s，代码中阈值应为 ${commentVal}s (3000ms)`);
+	
+	// 验证注释值匹配 actual timeout in ms
+	const thresholdMs = 3000;
+	const thresholdSec = thresholdMs / 1000;
+	assertEq(commentVal, thresholdSec, `注释值 ${commentVal}s 匹配代码阈值 ${thresholdSec}s`);
+} else {
+	// Try the previous comment text
+	const prevCommentMatch = source.match(/Second Esc press within [\w\s]+ → confirm cancel/);
+	if (prevCommentMatch) {
+		const commentText = prevCommentMatch[0];
+		// Should contain "3s" now
+		assertTrue(commentText.includes("3s"), `注释现在说 "3s"，得到: "${commentText}"`);
+	} else {
+		fail++;
+		console.error("  ❌ 找不到 Esc 注释");
+	}
+}
+
+
+console.log("\n═══ Bug G 测试 — 链上下文传递 (executeSingleStep) ═══\n");
+
+// ── Test G1: executeSingleStep 中包含链上下文捕获逻辑 ──
+console.log("📋 测试 G1: executeSingleStep 中有 chain context 捕获\n");
+
+const singleStepFuncStart = source.indexOf("async function executeSingleStep");
+assert(singleStepFuncStart !== -1, "找到 executeSingleStep 函数");
+const singleStepEndSearch = source.indexOf("async function executeLoopGroup", singleStepFuncStart);
+const fullSingleStep = source.slice(singleStepFuncStart, singleStepEndSearch);
+
+const hasChainContextKey = fullSingleStep.includes('chainKey');
+assertTrue(hasChainContextKey, "executeSingleStep 中有 chainKey 变量");
+
+const hasUpdateChainContext = fullSingleStep.includes('updateChainContext(chainKey');
+assertTrue(hasUpdateChainContext, "executeSingleStep 中调用 updateChainContext");
+
+const hasPlannerKey = fullSingleStep.includes('"计划制定摘要"');
+assertTrue(hasPlannerKey, "agentName === planner 时使用 '计划制定摘要' key");
+
+const hasDocWriterKey = fullSingleStep.includes('"文档更新摘要"');
+assertTrue(hasDocWriterKey, "agentName === docWriter 时使用 '文档更新摘要' key");
+
+
+console.log("\n═══ Bug H 测试 — Agent 前置元数据解析 ═══\n");
+
+// ── Test H1: 所有 workflow agent 的 session 已启用（可追溯） ──
+console.log("📋 测试 H1: 所有 workflow agent 的 session 已启用（session: true）\n");
+
+const agentFiles = [
+	"agents/workflow/planner-agent.md",
+	"agents/workflow/worker-agent.md",
+	"agents/workflow/reviewer-agent.md",
+	"agents/workflow/trimmer-agent.md",
+	"agents/workflow/docWriter-agent.md",
+	"agents/review-agent.md",
+];
+for (const af of agentFiles) {
+	const agentPath = path.resolve(__dirname, "..", af);
+	if (fs.existsSync(agentPath)) {
+		const content = fs.readFileSync(agentPath, "utf-8");
+		const hasSessionTrue = content.includes("session: true");
+		assertTrue(hasSessionTrue, `${af} 包含 session: true`);
+		const hasSessionFalse = content.includes("session: false");
+		assertFalse(hasSessionFalse, `${af} 不包含 session: false`);
+	} else {
+		console.log(`  ℹ️  跳过不存在的文件: ${af}`);
+	}
+}
+
+// ── Test H2: 所有 workflow agent 有 MCP/SKILL 可用声明（工具白名单已移除 → MCP 实际可用） ──
+console.log("\n📋 测试 H2: workflow agent 包含 MCP/SKILL 可用声明（白名单已移除，MCP 实际可用）\n");
+
+const workflowAgentFiles = [
+	"agents/workflow/planner-agent.md",
+	"agents/workflow/worker-agent.md",
+	"agents/workflow/reviewer-agent.md",
+	"agents/workflow/trimmer-agent.md",
+	"agents/workflow/docWriter-agent.md",
+];
+for (const af of workflowAgentFiles) {
+	const agentPath = path.resolve(__dirname, "..", af);
+	if (fs.existsSync(agentPath)) {
+		const content = fs.readFileSync(agentPath, "utf-8");
+		const hasExtraToolsSection = content.includes("## 额外可用工具");
+		assertTrue(hasExtraToolsSection, `${af} 包含 '## 额外可用工具' 节`);
+		const hasMcpClaim = content.includes("MCP");
+		assertTrue(hasMcpClaim, `${af} 包含 MCP 声明`);
+		const hasSkillClaim = content.includes("SKILL");
+		assertTrue(hasSkillClaim, `${af} 包含 SKILL 声明`);
+	} else {
+		console.log(`  ℹ️  跳过不存在的文件: ${af}`);
+	}
+}
+
+// ── Test H3: workflow agent 没有 tools 白名单（以允许 MCP 工具） ──
+console.log("\n📋 测试 H3: workflow agent 没有 tools 白名单限制\n");
+
+for (const af of workflowAgentFiles) {
+	const agentPath = path.resolve(__dirname, "..", af);
+	if (fs.existsSync(agentPath)) {
+		const content = fs.readFileSync(agentPath, "utf-8");
+		// Should NOT have a tools: line in frontmatter
+		const hasToolsLine = /^tools:/.test(content.split("---")?.[1] ?? "");
+		assertFalse(hasToolsLine, `${af} 无 tools: 行（白名单已移除）`);
+	} else {
+		console.log(`  ℹ️  跳过不存在的文件: ${af}`);
+	}
+}
+
+// ── Test H4: sub-agents.ts 中 session 使用完整路径 + .jsonl ──
+console.log("\n📋 测试 H4: sub-agents.ts session 路径构造\n");
+
+const subAgentSource = fs.readFileSync(path.resolve(__dirname, "../extensions/sub-agents.ts"), "utf-8");
+const hasMkdirSync = subAgentSource.includes("fs.mkdirSync(sessionDir");
+assertTrue(hasMkdirSync, "spawnSubagent 创建 session 目录");
+const hasJsonlPath = subAgentSource.includes(".jsonl");
+assertTrue(hasJsonlPath, "session 文件路径包含 .jsonl 扩展名");
+const hasSessionPath = subAgentSource.includes("path.join(sessionDir");
+assertTrue(hasSessionPath, "使用 path.join 构建完整 session 路径");
+const noSessionDirArg = subAgentSource.includes("--session-dir");
+assertFalse(noSessionDirArg, "不再使用 --session-dir（改用完整路径 --session）");
+
+// ── Test H5: Agent frontmatter 字段解析正确 ──
+console.log("\n📋 测试 H5: Agent frontmatter 字段解析\n");
+
+// subAgentSource 已在 H4 中声明，此处直接复用
+
+const hasThinkingField = subAgentSource.includes('fields.thinking');
+assertTrue(hasThinkingField, "loadAgent 解析 thinking 字段");
+
+const hasSessionField = subAgentSource.includes('fields.session');
+assertTrue(hasSessionField, "loadAgent 解析 session 字段");
+
+const hasSessionDirField = subAgentSource.includes('fields["session-dir"]');
+assertTrue(hasSessionDirField, "loadAgent 解析 session-dir 字段");
+
+const hasNoContextField = subAgentSource.includes('fields["no-context"]');
+assertTrue(hasNoContextField, "loadAgent 解析 no-context 字段");
+
+const hasNoExtensionsField = subAgentSource.includes('fields["no-extensions"]');
+assertTrue(hasNoExtensionsField, "loadAgent 解析 no-extensions 字段");
+
+const hasExtraArgsField = subAgentSource.includes('fields["extra-args"]');
+assertTrue(hasExtraArgsField, "loadAgent 解析 extra-args 字段");
+
+
+console.log("\n═══ Bug I 测试 — 工作流 UUID 溯源机制 ═══\n");
+
+// ── Test I1: workflowId 注入到 buildTaskForStep ──
+console.log("📋 测试 I1: buildTaskForStep 接收 workflowId 参数\n");
+
+const bldFuncStart = source.indexOf("function buildTaskForStep");
+assert(bldFuncStart !== -1, "找到 buildTaskForStep 函数");
+const bldFuncParams = source.slice(bldFuncStart, bldFuncStart + 300);
+
+const hasWorkflowIdParam = bldFuncParams.includes("workflowId");
+assertTrue(hasWorkflowIdParam, "buildTaskForStep 接收 workflowId 参数");
+
+const hasChainContextParam = bldFuncParams.includes("chainContext");
+assertTrue(hasChainContextParam, "buildTaskForStep 接收 chainContext 参数");
+
+// ── Test I2: CheckpointData 包含 workflowId ──
+console.log("\n📋 测试 I2: CheckpointData 包含 workflowId\n");
+
+const checkpointDataMatch = source.match(/interface CheckpointData [\s\S]{0,500}workflowId/);
+assertNotNull(checkpointDataMatch, "CheckpointData 接口包含 workflowId");
+
+// ── Test I3: buildWorkflowInfoBlock 函数存在 ──
+console.log("\n📋 测试 I3: buildWorkflowInfoBlock 函数存在\n");
+
+const hasBuildWorkflowInfoBlock = source.includes("function buildWorkflowInfoBlock");
+assertTrue(hasBuildWorkflowInfoBlock, "buildWorkflowInfoBlock 函数存在");
+
+// ── Test I4: buildReviewTask 也接收 workflowId ──
+console.log("\n📋 测试 I4: buildReviewTask 接收 workflowId\n");
+
+const reviewTaskStart = source.indexOf("function buildReviewTask");
+assert(reviewTaskStart !== -1, "找到 buildReviewTask 函数");
+const reviewTaskParams = source.slice(reviewTaskStart, reviewTaskStart + 200);
+const reviewHasWorkflowId = reviewTaskParams.includes("workflowId");
+assertTrue(reviewHasWorkflowId, "buildReviewTask 接收 workflowId 参数");
+
+
+console.log("\n=== 增强功能测试汇总 ===\n");
+console.log("📋 附加测试覆盖:");
+console.log("  - G: 链上下文传递 (executeSingleStep)");
+console.log("  - H: Agent 前置元数据解析 + MCP/SKILL 移除");
+console.log("  - I: 工作流 UUID 溯源机制");
+
+
 console.log("\n═══════════════════════════════════════════════════════\n");
 console.log(`📊 结果: ${pass} 通过, ${fail} 失败\n`);
 

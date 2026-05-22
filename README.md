@@ -13,6 +13,8 @@ pi install git:github.com/cherish-ltt/pi-dev-workflow
 ```
 
 然后 `/reload` 热加载即可使用所有功能。
+> [!NOTE]  
+> 本pi-package存在sub-agent功能，会与其他使用sub-agent功能的pi-package冲突，但冲突可以修复，请提交issue或自行处理。
 
 ## 目录结构
 

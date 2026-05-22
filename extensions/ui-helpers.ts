@@ -309,6 +309,8 @@ export function uiInput(
 export interface WorkflowSubStepWidgetState {
     agent: string;
     status: "pending" | "running" | "done" | "failed";
+    /** Thinking level for this agent ("off" | "low" | "medium" | "high" | "xhigh") */
+    thinkingLevel?: string;
     /** Recent tool activity (e.g. "edit:src/main.rs", "read:config.json") */
     tools?: string[];
     /** Output file paths */
@@ -357,6 +359,8 @@ export interface WorkflowWidgetState {
     updatedAt: string;
     /** Human-readable task summary shown in widget header, e.g. "[feat - 在 auth 中实现登录]" */
     taskSummary?: string;
+    /** Workflow UUID for cross-file traceability */
+    workflowId?: string;
 }
 
 // ── Widget component builder ─────────────────────────────────
@@ -440,6 +444,9 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                 ? theme.fg("error", "✗")
                 : theme.fg("warning", "■");
     lines.push(`${glyph} 工作流 · ${dim(theme, modeLabel)} · ${dim(theme, formatDurationFull(elapsed))}`);
+    if (state.workflowId) {
+        lines.push(`   ${dim(theme, `UUID: ${state.workflowId}`)}`);
+    }
 
     // ── Step list ──
     for (let i = 0; i < state.steps.length; i++) {
@@ -465,20 +472,6 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
         } else {
             icon = dim(theme, "◦");
         }
-
-        // ── Duration ──
-        let displayDurMs: number | undefined = s.durationMs;
-        if (isRunning && s.startedAt) {
-            displayDurMs = Date.now() - s.startedAt;
-        }
-        const durStr =
-            displayDurMs != null
-                ? dim(theme, ` (${formatDurationFull(displayDurMs)}`)
-                : isRunning
-                  ? dim(theme, ` (0s`)
-                  : "";
-        const timeout = s.timeoutMs ? dim(theme, `/超时时间${formatTimeout(s.timeoutMs)}`) : "";
-        const durClose = displayDurMs != null || isRunning ? dim(theme, ")") : "";
 
         // ── Loop count (第 N 次循环) for loop-group steps ──
         let loopStr = "";
@@ -520,8 +513,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
             stepIndent = "      ";
         }
 
-        // ── Step line ──
-        lines.push(`${stepIndent}${icon} ${labelStyle}${loopStr}${durStr}${timeout}${durClose}`);
+        // ── Step line (注意：计时/超时信息只在子代理行展示，不在父步骤行展示) ──
+        lines.push(`${stepIndent}${icon} ${labelStyle}${loopStr}`);
 
         // ── Sub-steps (agents with |__ tree) ──
         if (s.subSteps && s.subSteps.length > 0) {
@@ -550,11 +543,14 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                 let subDurStr = "";
                 let subTimeoutStr = "";
                 let subDurClose = "";
+                // ⭐ 修复：已完成/失败的子代理使用记录的 durationMs，运行中使用 live 计时
                 let elapsedMs: number | undefined;
-                if (sub.startedAt) {
-                    elapsedMs = Date.now() - sub.startedAt;
-                } else if (sub.durationMs != null) {
+                if (isSubDone || sub.status === "failed") {
+                    // 已完成/失败 → 使用最终记录的 durationMs（代理完成时已冻结）
                     elapsedMs = sub.durationMs;
+                } else if (isSubRunning && sub.startedAt) {
+                    // 运行中 → 实时计算从 startedAt 到现在的时长
+                    elapsedMs = Date.now() - sub.startedAt;
                 }
                 if (elapsedMs != null) {
                     subDurStr = dim(theme, ` (${formatDurationFull(elapsedMs)}`);
@@ -570,7 +566,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                     subDurClose = dim(theme, ")");
                 }
                 const agentConnector = dim(theme, "|__");
-                lines.push(`${agentIndent}${agentConnector} ${subIcon} ${sub.agent} ·${subDurStr}${subTimeoutStr}${subDurClose}`);
+                const thinkingTag = sub.thinkingLevel ? dim(theme, `thinking-${sub.thinkingLevel} `) : "";
+                lines.push(`${agentIndent}${agentConnector} ${subIcon} ${sub.agent} · ${thinkingTag}${subDurStr}${subTimeoutStr}${subDurClose}`);
 
                 // ── Children (tools, outputs, or "正在排队") ──
                 const childItems: string[] = [];
@@ -1011,6 +1008,7 @@ export function sendWorkflowResult(
         `[${taskSummary}]`,
         "",
         `${resultIcon} **工作流${statusText}** (${totalDur})`,
+        state.workflowId ? `工作流 UUID: \`${state.workflowId}\`` : "",
         "",
         stepSummaryParts.join("\n"),
         "",
@@ -1058,6 +1056,7 @@ export function buildWidgetState(
     status: WorkflowWidgetState["status"],
     extra?: { toolCount?: number; tokenCount?: number },
     taskSummary?: string,
+    workflowId?: string,
 ): WorkflowWidgetState {
     return {
         mode,
@@ -1069,6 +1068,7 @@ export function buildWidgetState(
         toolCount: extra?.toolCount,
         tokenCount: extra?.tokenCount,
         taskSummary,
+        workflowId,
     };
 }
 

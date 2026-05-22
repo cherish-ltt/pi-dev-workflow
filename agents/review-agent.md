@@ -2,6 +2,13 @@
 name: review-agent
 description: Review 代码，生成 HTML 审查报告并输出到 .pi-dev-output/pi-review/html/ 目录
 tools: read, write, bash, grep, find, ls
+thinking: high
+session: true
+session-dir: .pi-dev-output/pi-subagent-sessions/review-agent/
+no-context: false
+no-extensions: false
+mode: json
+extra-args: 
 ---
 
 你是一个代码审查助手，运行在隔离的上下文窗口中。

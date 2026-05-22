@@ -20,6 +20,41 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomBytes } from "node:crypto";
+
+/**
+ * Generate a UUID v7 (time-ordered) string.
+ * Format: tttttttt-tttt-7xxx-yxxx-xxxxxxxxxxxx
+ * - t = Unix timestamp (ms) as 48-bit big-endian
+ * - 7 = version (0111)
+ * - y = variant (10xx = 8, 9, a, b)
+ * - x = random
+ */
+function uuidv7(): string {
+	const ts = BigInt(Date.now());
+	const buf = new Uint8Array(16);
+	// 48-bit timestamp (big-endian) in bytes 0-5
+	buf[0] = Number((ts >> 40n) & 0xFFn);
+	buf[1] = Number((ts >> 32n) & 0xFFn);
+	buf[2] = Number((ts >> 24n) & 0xFFn);
+	buf[3] = Number((ts >> 16n) & 0xFFn);
+	buf[4] = Number((ts >> 8n) & 0xFFn);
+	buf[5] = Number(ts & 0xFFn);
+	// 10 random bytes for version/variant/rand
+	const r = randomBytes(10);
+	// Byte 6: version (0111) | rand_a high 4 bits
+	buf[6] = 0x70 | (r[0] >> 4);
+	// Byte 7: rand_a low 8 bits
+	buf[7] = (r[0] << 4) | (r[1] >> 4);
+	// Byte 8: variant (10) | rand_b high 6 bits
+	buf[8] = 0x80 | (r[2] >> 2);
+	// Bytes 9-15: remaining rand_b (56 bits)
+	buf[9] = r[3]; buf[10] = r[4]; buf[11] = r[5];
+	buf[12] = r[6]; buf[13] = r[7]; buf[14] = r[8]; buf[15] = r[9];
+	// Format as 8-4-4-4-12 hex UUID
+	const hex = Array.from(buf, b => b.toString(16).padStart(2, '0')).join('');
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { execSync } from "child_process";
@@ -95,6 +130,8 @@ interface BaselineEntry {
 
 interface CheckpointData {
 	version: 2;
+	/** UUID that uniquely identifies this workflow run across all output files */
+	workflowId: string;
 	createdAt: string;
 	updatedAt: string;
 	prompt: string;
@@ -372,7 +409,7 @@ function toGitStatus(toolType: string): string {
  */
 function hasContentChanged(cwd: string, path: string, baselineHash: string): boolean {
 	try {
-		const currentHash = require('child_process').spawnSync('git', ['hash-object', path], { cwd, encoding: 'utf8', timeout: 3000 }).stdout?.trim() || "";
+		const currentHash = execSync(`git hash-object "${path}"`, { cwd, encoding: 'utf8', timeout: 3000 }).trim();
 		return currentHash !== baselineHash;
 	} catch {
 		// file deleted or inaccessible — consider changed
@@ -486,16 +523,17 @@ export function loadCheckpointFromFile(cwd: string): CheckpointData | null {
 }
 
 /**
- * Archive checkpoint after completion: rename to checkpoint-<plan-id>.json
+ * Archive checkpoint after completion: rename to checkpoint-<uuid>-<plan-id>.json
  */
 export function archiveCheckpointFile(cwd: string, planFileRelPath?: string): void {
 	try {
 		const cpPath = path.join(cwd, CHECKPOINT_FILE);
 		if (!fs.existsSync(cpPath)) return;
+		const uuidPart = _workflowId ? `-${_workflowId}` : "";
 		const planId = planFileRelPath
 			? path.basename(planFileRelPath, ".md").replace(/[^a-zA-Z0-9_-]/g, "_")
 			: `archive-${Date.now().toString(36)}`;
-		const archiveName = `checkpoint-${planId}.json`;
+		const archiveName = `checkpoint${uuidPart}-${planId}.json`;
 		const archiveDir = path.join(cwd, DEV_OUTPUT_DIR, "pi-workflow");
 		fs.renameSync(cpPath, path.join(archiveDir, archiveName));
 	} catch { /* ignore */ }
@@ -510,25 +548,43 @@ function buildTaskForStep(
 	prompt: string,
 	planFileRelPath: string | undefined,
 	cwd: string,
+	workflowId: string,
+	chainContext?: string,
 ): string {
 	if (agentName === "planner") {
 		return [
 			"请根据以下功能需求，分析代码库结构，生成详细的实施计划，并写入 .pi-dev-output/pi-plans/ 目录。",
 			"",
+			"## 文件名格式",
+			`<YYYYMMDD-HHmmss>-<简短功能名>-${workflowId}.md`,
+			"请在文件名末尾添加工作流 UUID，以便同一工作流的所有文件可关联追溯。",
+			"",
 			"## 功能需求",
 			prompt,
+			...(buildWorkflowInfoBlock() ? ["", buildWorkflowInfoBlock()] : []),
 		].join("\n");
 	}
 	if (agentName === "worker") {
 		const planContent = planFileRelPath ? readFileContent(cwd, planFileRelPath) : undefined;
+		const planLocation = planFileRelPath
+			? `\n实施计划文件位于: ${planFileRelPath}\n(可在 .pi-dev-output/pi-plans/ 目录中 grep UUID "${workflowId}" 找到)`
+			: "";
 		if (planContent) {
 			return [
 				"请根据以下实施计划逐步实现代码改动。",
 				"",
 				"## 实施计划",
 				planContent,
+				planLocation,
+				"",
+				"## 原始需求与修改反馈",
+				prompt,
+				...(chainContext ? ["", chainContext] : []),
 				"",
 				"请严格按照计划中的步骤实施，不要做计划外的修改。",
+				"",
+				"实施完成后，在输出中列出你修改的所有文件，供后续审查者参考。",
+				...(buildWorkflowInfoBlock() ? ["", buildWorkflowInfoBlock()] : []),
 			].join("\n");
 		}
 		return [
@@ -536,17 +592,26 @@ function buildTaskForStep(
 			"",
 			"## 功能需求",
 			prompt,
+			planLocation,
+			...(chainContext ? ["", chainContext] : []),
 			"",
 			"请先分析代码库，制定简要计划，再逐步实施。",
+			"实施完成后，在输出中列出你修改的所有文件，供后续审查者参考。",
+			...(buildWorkflowInfoBlock() ? ["", buildWorkflowInfoBlock()] : []),
 		].join("\n");
 	}
 	if (agentName === "trimmer") {
+		const planContent = planFileRelPath ? readFileContent(cwd, planFileRelPath) : undefined;
 		return [
 			"请精简当前代码库的代码。",
 			"缩短不必要的冗长行，优化可读性，消除可合并的重复逻辑。",
+			"注意：以下实施计划列出了本次工作流的核心新增内容，精简时请确保不影响这些改动。",
 			"",
 			"## 原始功能需求",
 			prompt,
+			...(planContent ? ["", "## 实施计划（改动范围）", planContent] : []),
+			...(chainContext ? ["", chainContext] : []),
+			...(buildWorkflowInfoBlock() ? ["", buildWorkflowInfoBlock()] : []),
 		].join("\n");
 	}
 	if (agentName === "docWriter") {
@@ -559,6 +624,8 @@ function buildTaskForStep(
 			"## 功能需求",
 			prompt,
 			planContent,
+			...(chainContext ? ["", chainContext] : []),
+			...(buildWorkflowInfoBlock() ? ["", buildWorkflowInfoBlock()] : []),
 		].join("\n");
 	}
 	return prompt;
@@ -568,21 +635,35 @@ function buildReviewTask(
 	prompt: string,
 	planFileRelPath: string | undefined,
 	cwd: string,
+	workflowId: string,
+	chainContext?: string,
 ): string {
 	const planContent = planFileRelPath ? readFileContent(cwd, planFileRelPath) : undefined;
 	const parts = [
 		"请审查当前代码库中针对以下功能的实现。",
 		"检查是否有 bug、逻辑错误、未完成的功能、代码质量问题。",
 		"将详细审查报告写入 .pi-dev-output/pi-review/md/ 目录。",
+		"",
+		"## 文件名格式",
+		`review-<YYYYMMDD-HHmmss>-${workflowId}.md`,
+		"请在文件名末尾添加工作流 UUID，以便同一工作流的所有文件可关联追溯。",
+		"",
 		"在回复末尾输出以下格式的结构化摘要（必须包含）：",
 		"[REVIEW_SUMMARY]",
 		'{"maxSeverity":"critical|medium|low","critical":N,"medium":N,"low":N}',
 		"[/REVIEW_SUMMARY]",
 		"",
+		"⚠️ 重要：这个 JSON 摘要不是可选的，而是强制性的。",
+		"如果缺少此 JSON 摘要，工作流将无法判断是否需要继续修复循环。",
+		"请在回复的末尾单独输出，确保前后无其他文本（除换行符外）。",
+		"注意最大严重级别字段名是 maxSeverity（注意大小写）。",
+		"",
 		"## 功能需求",
 		prompt,
 	];
 	if (planContent) parts.push("", "## 实施计划", planContent);
+	if (chainContext) parts.push("", chainContext);
+	if (buildWorkflowInfoBlock()) parts.push("", buildWorkflowInfoBlock());
 	return parts.join("\n");
 }
 
@@ -613,6 +694,10 @@ let _workflowAgentRunHistory: AgentRunEntry[] = [];
 let _workflowStepDefs: WorkflowStepDef[] = [];
 /** Baseline snapshot: git hashes of dirty files at workflow start */
 let _workflowBaseline: BaselineEntry[] = [];
+/** Workflow UUID for cross-file traceability */
+let _workflowId = "";
+/** Chain context: keyed parts of previous agent output to pass to next agent */
+let _chainContextParts: Record<string, string> = {};
 
 let _widgetMode: WorkflowMode = "attended";
 let _widgetSteps: WorkflowStepWidgetState[] = [];
@@ -622,6 +707,58 @@ let _widgetExtraToolCount = 0;
 let _widgetExtraTokenCount = 0;
 let _workflowRunning = false;
 let _cleanupTimer: ReturnType<typeof setTimeout> | null = null;
+
+// ── Chain context helpers ──────────────────────────────────────
+
+/**
+ * Update a named part of the chain context. Each key is a section header;
+ * calling with the same key overwrites the previous value.
+ */
+function updateChainContext(key: string, content: string): void {
+	if (content) {
+		_chainContextParts[key] = content;
+	} else {
+		delete _chainContextParts[key];
+	}
+}
+
+/**
+ * Build the chain context string from all parts, for injection into
+ * buildTaskForStep / buildReviewTask prompts.
+ */
+function buildChainContext(): string {
+	const parts = Object.entries(_chainContextParts)
+		.filter(([_, v]) => v)
+		.map(([k, v]) => `## ${k}\n${v}`);
+	return parts.length > 0 ? parts.join("\n\n") : "";
+}
+
+/**
+ * Reset chain context — called at the start of a new workflow.
+ */
+function resetChainContext(): void {
+	_chainContextParts = {};
+}
+
+/**
+ * Build a standard Workflow Info block injected into every subagent prompt.
+ */
+function buildWorkflowInfoBlock(): string {
+	if (!_workflowId) return "";
+	const modeLabel = _widgetMode === "full-auto" ? "全自动"
+		: _widgetMode === "full-attended" ? "完全值守"
+		: "值守";
+	return [
+		"## 工作流信息",
+		`- 工作流 UUID: ${_workflowId}`,
+		`- 工作流类型: ${_workflowType ?? "通用"}`,
+		`- 工作流启动时间: ${_workflowCreatedAt}`,
+		`- 工作流模式: ${modeLabel}`,
+		"",
+		"提示：如果需要在 .pi-dev-output/ 下查找属于本工作流的文件，",
+		`请在工作流输出目录中搜索工作流 UUID "${_workflowId}"。`,
+	].join("\n");
+}
 
 function refreshWidget(): void {
 	if (!_lastWorkflowCtx) return;
@@ -637,6 +774,7 @@ function refreshWidget(): void {
 			"running",
 		{ toolCount: _widgetExtraToolCount, tokenCount: _widgetExtraTokenCount },
 		taskSummary,
+		_workflowId,
 	);
 	updateWorkflowWidget(_lastWorkflowCtx, widgetState);
 }
@@ -694,12 +832,19 @@ function populatePredefinedSubSteps(stepIndex: number): void {
 	if (step.subSteps && step.subSteps.length > 0) return; // already populated
 
 	const def = _workflowStepDefs[stepIndex]!;
+	const agents = discoverAgents();
+
+	function agentThinkingLevel(name: string): string | undefined {
+		return agents.find(a => a.name === name)?.thinkingLevel;
+	}
+
 	const newSubSteps: WorkflowSubStepWidgetState[] = [];
 
 	if (def.type === "loop-group") {
 		if (def.loopAgentName) {
 			newSubSteps.push({
 				agent: def.loopAgentName,
+				thinkingLevel: agentThinkingLevel(def.loopAgentName),
 				status: "pending",
 				tools: [],
 				outputs: [],
@@ -708,6 +853,7 @@ function populatePredefinedSubSteps(stepIndex: number): void {
 		if (def.reviewAgentName) {
 			newSubSteps.push({
 				agent: def.reviewAgentName,
+				thinkingLevel: agentThinkingLevel(def.reviewAgentName),
 				status: "pending",
 				tools: [],
 				outputs: [],
@@ -716,6 +862,7 @@ function populatePredefinedSubSteps(stepIndex: number): void {
 	} else if (def.agentName) {
 		newSubSteps.push({
 			agent: def.agentName,
+			thinkingLevel: agentThinkingLevel(def.agentName),
 			status: "pending",
 			tools: [],
 			outputs: [],
@@ -802,6 +949,24 @@ function setWidgetSubStepStatus(stepIndex: number, agentName: string, status: Wo
 		sub.status = status;
         refreshWidget();
     }
+}
+
+/**
+ * 重置子步骤为 pending 状态并清除计时信息（durationMs/startedAt）。
+ * 用于循环组中开启新循环时，清除上一轮的计时数据。
+ */
+function resetWidgetSubStepTimers(stepIndex: number, agentName: string): void {
+    const step = _widgetSteps[stepIndex];
+    if (!step) return;
+    const sub = step.subSteps?.find(s => s.agent === agentName);
+    if (sub) {
+        sub.status = "pending";
+        sub.durationMs = undefined;
+        sub.startedAt = undefined;
+        sub.tools = [];
+        sub.outputs = [];
+    }
+    refreshWidget();
 }
 
 function setWidgetCurrentStep(index: number): void {
@@ -984,7 +1149,7 @@ async function runAgentWithProgress(
 				addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
 			}
 		}
-	});
+	}, _workflowId ? { workflowId: _workflowId } : undefined);
 
 	const agentDuration = Date.now() - agentStartTime;
 
@@ -1128,6 +1293,14 @@ async function runAgentWithProgress(
 		"done";
 	setWidgetSubStepStatus(stepIndex, agentName, subStatus);
 
+	// ⭐ 修复：代理完成后设置最终持续时长并清除 startedAt
+	// 确保 UI 使用记录的 durationMs 而非实时 Date.now() - startedAt
+	const completedSub = _widgetSteps[stepIndex]?.subSteps?.find(s => s.agent === agentName);
+	if (completedSub) {
+		completedSub.durationMs = agentDuration;
+		completedSub.startedAt = undefined;
+	}
+
 	return result;
 }
 
@@ -1149,7 +1322,7 @@ async function executeSingleStep(
 	const agent = agentMap.get(agentName);
 	if (!agent) throw new Error(`未找到 agent: ${agentName}`);
 
-	const task = buildTaskForStep(agentName, prompt, planFileRelPath, _workflowCwd);
+	const task = buildTaskForStep(agentName, prompt, planFileRelPath, _workflowCwd, _workflowId, buildChainContext());
 	let retried = false;
 
 	let result = await runAgentWithProgress(agent, task, stepIndex, agentName, step.timeoutMs);
@@ -1175,6 +1348,35 @@ async function executeSingleStep(
 
 	if (result.exitCode !== 0 && result.stderr) {
 		throw new Error(`Agent 错误 (exit ${result.exitCode}): ${result.stderr.slice(0, 500)}`);
+	}
+
+	// ── Capture chain context for single-step agents ──
+	const agentChanges = _workflowFileChanges
+		.filter(c => c.stepIndex === stepIndex && c.agent === agentName)
+		.map(c => `${c.type === "new" ? "A" : c.type === "delete" ? "D" : "M"}   ${c.filePath}`);
+
+	let chainKey: string;
+	if (agentName === "planner") chainKey = "计划制定摘要";
+	else if (agentName === "docWriter") chainKey = "文档更新摘要";
+	else chainKey = `${agentName} 执行摘要`;
+
+	if (agentChanges.length > 0) {
+		const editCount = agentChanges.filter(c => c.startsWith("M")).length;
+		const newCount = agentChanges.filter(c => c.startsWith("A")).length;
+		const delCount = agentChanges.filter(c => c.startsWith("D")).length;
+		const statsParts: string[] = [];
+		if (editCount > 0) statsParts.push(`修改 ${editCount} 个`);
+		if (newCount > 0) statsParts.push(`新增 ${newCount} 个`);
+		if (delCount > 0) statsParts.push(`删除 ${delCount} 个`);
+		const statsLine = statsParts.length > 0 ? `改动统计: ${statsParts.join("，")}\n\n` : "";
+
+		updateChainContext(chainKey,
+			`${agentName} 已完成。\n` +
+			statsLine +
+			`变更文件列表:\n${agentChanges.join("\n")}`
+		);
+	} else {
+		updateChainContext(chainKey, `${agentName} 已完成执行，未检测到文件变更。`);
 	}
 }
 
@@ -1213,13 +1415,13 @@ async function executeLoopGroup(
 			startedAt: _widgetSteps[stepIndex]?.startedAt || Date.now(),
 		});
 
-		// 每次循环开始时重置 sub-step 状态
-		setWidgetSubStepStatus(stepIndex, step.loopAgentName!, "pending");
-		setWidgetSubStepStatus(stepIndex, step.reviewAgentName!, "pending");
+		// 每次循环开始时重置 sub-step 状态（清除上一轮的计时和工具记录）
+		resetWidgetSubStepTimers(stepIndex, step.loopAgentName!);
+		resetWidgetSubStepTimers(stepIndex, step.reviewAgentName!);
 		const loopStartTime = Date.now();
 
-		// Run loop agent
-		const loopTask = buildTaskForStep(step.loopAgentName!, contextPrompt, planFileRelPath, _workflowCwd);
+		// ── Run loop agent (worker / trimmer) ──
+		const loopTask = buildTaskForStep(step.loopAgentName!, contextPrompt, planFileRelPath, _workflowCwd, _workflowId, buildChainContext());
 
 		let agentResult = await runAgentWithProgress(loopAgent, loopTask, stepIndex, step.loopAgentName!, step.timeoutMs);
 
@@ -1238,9 +1440,40 @@ async function executeLoopGroup(
             }
         }
 
+		// ── After loop agent completes: capture changes + stats for chain context ──
+		const loopAgentChanges = _workflowFileChanges
+			.filter(c => c.stepIndex === stepIndex && c.agent === step.loopAgentName)
+			.map(c => `${c.type === "new" ? "A" : c.type === "delete" ? "D" : "M"}   ${c.filePath}`);
+
+		// Use agent-specific keys so worker and trimmer changes coexist without overwriting
+		const chainKey = step.loopAgentName === "worker" ? "代码实施摘要" : "代码精简摘要";
+
+		if (loopAgentChanges.length > 0) {
+			const editCount = loopAgentChanges.filter(c => c.startsWith("M")).length;
+			const newCount = loopAgentChanges.filter(c => c.startsWith("A")).length;
+			const delCount = loopAgentChanges.filter(c => c.startsWith("D")).length;
+			const statsParts: string[] = [];
+			if (editCount > 0) statsParts.push(`修改 ${editCount} 个`);
+			if (newCount > 0) statsParts.push(`新增 ${newCount} 个`);
+			if (delCount > 0) statsParts.push(`删除 ${delCount} 个`);
+			const statsLine = statsParts.length > 0 ? `改动统计: ${statsParts.join("，")}\n\n` : "";
+
+			updateChainContext(chainKey,
+				`${step.loopAgentName === "worker" ? "代码实施" : "代码精简"}已完成。\n` +
+				statsLine +
+				`变更文件列表:\n${loopAgentChanges.join("\n")}` +
+				(planFileRelPath ? `\n\n实施计划: ${planFileRelPath}\n(可在 .pi-dev-output/pi-plans/ 中 grep UUID ${_workflowId} 找到)` : "")
+			);
+		} else {
+			updateChainContext(chainKey,
+				`${step.loopAgentName} 已完成执行，未检测到文件变更。\n` +
+				(planFileRelPath ? `实施计划: ${planFileRelPath}\n(可在 .pi-dev-output/pi-plans/ 中 grep UUID ${_workflowId} 找到)` : "")
+			);
+		}
+
 		if (isTimeoutResult(agentResult)) {
 			if (mode === "full-auto") {
-				contextPrompt = `[TIMEOUT_WARNING] 上一个 ${step.loopAgentName} 执行超时。\n\n${buildReviewTask(prompt, planFileRelPath, _workflowCwd)}`;
+				contextPrompt = `[TIMEOUT_WARNING] 上一个 ${step.loopAgentName} 执行超时。\n\n${buildReviewTask(prompt, planFileRelPath, _workflowCwd, _workflowId, buildChainContext())}`;
 			} else {
 				const choice = await uiSelect(ctx, `⏰ ${step.loopAgentName} 执行超时`, [
 					"1. 重新执行", "2. 进入审查阶段", "3. 跳过此步骤", "4. 取消工作流",
@@ -1248,20 +1481,20 @@ async function executeLoopGroup(
 				if (!choice || choice.startsWith("4")) { cancelWorkflow(); return; }
 				if (choice.startsWith("3")) { state.status = "skipped"; return; }
 				if (choice.startsWith("2")) {
-					contextPrompt = `[TIMEOUT_WARNING]\n\n${buildReviewTask(prompt, planFileRelPath, _workflowCwd)}`;
+					contextPrompt = `[TIMEOUT_WARNING]\n\n${buildReviewTask(prompt, planFileRelPath, _workflowCwd, _workflowId, buildChainContext())}`;
 				} else {
 					agentResult = await runAgentWithProgress(loopAgent, `[RETRY]\n\n${loopTask}`, stepIndex, step.loopAgentName!, step.timeoutMs);
 					if (isTimeoutResult(agentResult)) {
-						contextPrompt = `[TIMEOUT_WARNING]\n\n${buildReviewTask(prompt, planFileRelPath, _workflowCwd)}`;
+						contextPrompt = `[TIMEOUT_WARNING]\n\n${buildReviewTask(prompt, planFileRelPath, _workflowCwd, _workflowId, buildChainContext())}`;
 					}
 				}
 			}
 		}
 
-		// Run reviewer
+		// ── Run reviewer ──
 		const reviewTask = contextPrompt.includes("[TIMEOUT_WARNING]")
 			? contextPrompt
-			: buildReviewTask(contextPrompt, planFileRelPath, _workflowCwd);
+			: buildReviewTask(contextPrompt, planFileRelPath, _workflowCwd, _workflowId, buildChainContext());
 
 		const reviewResult = await runAgentWithProgress(reviewAgent, reviewTask, stepIndex, step.reviewAgentName!, reviewTimeoutMs);
 
@@ -1276,11 +1509,31 @@ async function executeLoopGroup(
 			}
 		}
 
+		// ── After reviewer: capture review context for next loop ──
+		// Use agent-specific key so worker-reviewer and trimmer-reviewer feedback don't interfere
+		const reviewChainKey = step.loopAgentName === "worker" ? "代码审查反馈" : "精简审查反馈";
+		if (reviewSummary) {
+			const reviewCountParts: string[] = [];
+			if (reviewSummary.critical > 0) reviewCountParts.push(`严重 ${reviewSummary.critical} 个`);
+			if (reviewSummary.medium > 0) reviewCountParts.push(`中等 ${reviewSummary.medium} 个`);
+			if (reviewSummary.low > 0) reviewCountParts.push(`低 ${reviewSummary.low} 个`);
+			const reviewStats = reviewCountParts.length > 0 ? `发现 ${reviewCountParts.join("，")} 问题。` : "未发现问题。";
+
+			updateChainContext(reviewChainKey,
+				`${reviewStats}\n` +
+				`完整审查报告在 .pi-dev-output/pi-review/md/ 目录中，\n` +
+				`请在工作流输出目录中 grep UUID "${_workflowId}" 查找最新报告。`
+			);
+		}
+
+		// ── Decide whether to loop ──
 		if (reviewSummary?.maxSeverity === "critical" && loopCount < maxLoops) {
+			const reviewReportHint = `\n完整审查报告在 .pi-dev-output/pi-review/md/（grep UUID "${_workflowId}" 查找）。`;
 			if (mode === "full-auto") {
 				contextPrompt = [prompt, "", "## 上次审查发现的问题",
 					`审查摘要: ${JSON.stringify(reviewSummary)}`,
 					`请修复 ${reviewSummary.critical} 个严重问题后重新运行。`,
+					reviewReportHint,
 				].join("\n");
 				continue;
 			} else {
@@ -1290,6 +1543,7 @@ async function executeLoopGroup(
 					contextPrompt = [prompt, "", "## 上次审查发现的问题",
 						`审查摘要: ${JSON.stringify(reviewSummary)}`,
 						`请修复这些严重问题后重新运行。`,
+						reviewReportHint,
 					].join("\n");
 					continue;
 				}
@@ -1433,6 +1687,40 @@ async function executeWorkflowBackground(
 			}
 		}
 
+		// ── Before executing docWriter, rebuild chain context with only relevant info ──
+		if (step.agentName === "docWriter") {
+			// Clear stale context (review feedback from worker/trimmer loops is noise for docWriter)
+			resetChainContext();
+			// Restore plan location
+			if (planFileRelPathInner) {
+				updateChainContext("实施计划",
+					`计划文件: ${planFileRelPathInner}\n` +
+					`(可在 .pi-dev-output/pi-plans/ 中 grep UUID ${_workflowId} 找到)`
+				);
+			}
+			// Build comprehensive change summary from ALL file changes
+			const workerChanges = _workflowFileChanges
+				.filter(c => c.type !== "read" && c.agent === "worker")
+				.map(c => `${c.type === "new" ? "A" : c.type === "delete" ? "D" : "M"}   ${c.filePath}`);
+			const trimmerChanges = _workflowFileChanges
+				.filter(c => c.type !== "read" && c.agent === "trimmer")
+				.map(c => `${c.type === "new" ? "A" : c.type === "delete" ? "D" : "M"}   ${c.filePath}`);
+			const allChangeLines: string[] = [];
+			if (workerChanges.length > 0) {
+				allChangeLines.push(`🔧 Worker (代码实施) - ${workerChanges.length} 个文件:`);
+				allChangeLines.push(...workerChanges);
+			}
+			if (trimmerChanges.length > 0) {
+				allChangeLines.push(`✂️ Trimmer (代码精简) - ${trimmerChanges.length} 个文件:`);
+				allChangeLines.push(...trimmerChanges);
+			}
+			if (allChangeLines.length > 0) {
+				updateChainContext("本次工作流全部变更",
+					`以下文件已被本次工作流修改:\n${allChangeLines.join("\n")}`
+				);
+			}
+		}
+
 		// ── Execute (timer starts NOW, after all user confirmations) ──
 		state.status = "running";
 		const stepStartTime = Date.now();
@@ -1449,6 +1737,13 @@ async function executeWorkflowBackground(
 				await executeSingleStep(ctx, step, state, agentMap, prompt, planFileRelPathInner, mode, currentStepIndex);
 				if (step.agentName === "planner") {
 					planFileRelPathInner = findLatestPlanFile(_workflowCwd);
+					// Update chain context so subsequent agents know where the plan is
+					if (planFileRelPathInner) {
+						updateChainContext("实施计划",
+							`计划文件: ${planFileRelPathInner}\n` +
+							`(可在 .pi-dev-output/pi-plans/ 中 grep UUID ${_workflowId} 找到)`
+						);
+					}
 				}
 			}
 			state.status = "done";
@@ -1491,6 +1786,7 @@ async function executeWorkflowBackground(
 		stepStates.every(s => s.status === "done" || s.status === "skipped") ? "done" : "failed",
 		{ toolCount: _widgetExtraToolCount, tokenCount: _widgetExtraTokenCount },
 		taskSummary,
+		_workflowId,
 	);
 	sendWorkflowResult(pi, finalState, prompt, _workflowType);
 
@@ -1504,6 +1800,7 @@ async function executeWorkflowBackground(
 	function buildCp(): CheckpointData {
 		return {
 			version: 2,
+			workflowId: _workflowId,
 			createdAt: existingCp?.createdAt ?? new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
 			prompt,
@@ -1622,6 +1919,12 @@ export async function runWorkflow(
 	_workflowFileChanges = existingCp?.fileChanges ? [...existingCp.fileChanges] : [];
 	_workflowAgentRunHistory = existingCp?.agentRunHistory ? [...existingCp.agentRunHistory] : [];
 
+	// Initialize or restore workflow UUID
+	_workflowId = existingCp?.workflowId ?? uuidv7();
+
+	// Reset chain context for new workflow session
+	resetChainContext();
+
 	// ── Baseline snapshot: restore from checkpoint or capture fresh ──
 	if (resumeFlow && existingCp?.baseline) {
 		_workflowBaseline = [...existingCp.baseline];
@@ -1631,6 +1934,7 @@ export async function runWorkflow(
 
 	saveCheckpoint(ctx.cwd, {
 		version: 2,
+		workflowId: _workflowId,
 		createdAt: existingCp?.createdAt ?? new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
 		prompt,
@@ -1673,13 +1977,16 @@ export async function runWorkflow(
 				_widgetCurrentIdx,
 				_widgetStartTime,
 				"cancelled",
+				undefined,
 				extractTaskSummary(_workflowPrompt),
+				_workflowId,
 			);
 			updateWorkflowWidget(_lastWorkflowCtx, finalState);
 
 			// ── Save final checkpoint before archiving ──
 			const cancelCp: CheckpointData = {
 				version: 2,
+				workflowId: _workflowId,
 				createdAt: _workflowCreatedAt,
 				updatedAt: new Date().toISOString(),
 				prompt: _workflowPrompt,
@@ -1730,7 +2037,7 @@ export async function runWorkflow(
 			if (_workflowRunning && _workflowAbortController && !_workflowAbortController.signal.aborted) {
 				const now = Date.now();
 				if (_lastEscPressTime > 0 && now - _lastEscPressTime < 3000) {
-					// Second Esc press within 5s → confirm cancel
+					// Second Esc press within 3s → confirm cancel
 					ctx.ui.notify("⏹️ 正在停止工作流...", "warning");
 					cancelWorkflow();
 					_lastEscPressTime = 0;
