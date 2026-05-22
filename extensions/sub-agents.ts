@@ -573,11 +573,13 @@ export function extractFinalOutput(jsonOutput: string): string {
 				textEndSeen = true;
 			}
 
-			// Format 2: Anthropic-style message events
-			// message_stop / message_end with content array
+			// Format 2: pi agent event — message_end / message_stop / message_complete
+			// Only process assistant messages; toolResult and user messages contain
+			// raw tool output (e.g. ls -la) that would pollute the extracted summary.
 			if ((event.type === "message_stop" || event.type === "message_end" ||
 			     event.type === "message_complete") &&
-			    event.message?.content) {
+			    event.message?.content &&
+			    event.message?.role === "assistant") {
 				const parts = Array.isArray(event.message.content)
 					? event.message.content
 					: [event.message.content];
@@ -607,6 +609,30 @@ export function extractFinalOutput(jsonOutput: string): string {
 			// Format 5: text key at top level
 			if (event.type === "complete" && event.text) {
 				result = event.text;
+			}
+
+			// Format 6: agent_end — iterate messages backwards to find the last
+			// assistant message with text content. This catches edge cases where
+			// the final assistant response has no type:text block (e.g. only
+			// thinking/toolCall), which left result polluted by a prior tool result.
+			if (event.type === "agent_end" && Array.isArray(event.messages)) {
+				for (let i = event.messages.length - 1; i >= 0; i--) {
+					const msg = event.messages[i];
+					if (msg?.role === "assistant" && Array.isArray(msg.content)) {
+						for (let j = msg.content.length - 1; j >= 0; j--) {
+							const block = msg.content[j];
+							if (typeof block === "string") {
+								result = block;
+								break;
+							}
+							if (block?.type === "text" && block.text) {
+								result = block.text;
+								break;
+							}
+						}
+						if (result) break;
+					}
+				}
 			}
 		} catch {
 			// If a line isn't JSON, it might be raw text output - collect it
