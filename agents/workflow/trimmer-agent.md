@@ -1,7 +1,6 @@
 ---
 name: trimmer
 description: 代码精简 agent — 精简冗余代码，缩短行数，优化可读性
-tools: read, bash, write, find, ls, grep
 thinking: medium
 session: true
 session-dir: .pi-dev-output/pi-subagent-sessions/trimmer/

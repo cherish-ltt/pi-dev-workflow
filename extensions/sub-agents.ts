@@ -379,13 +379,18 @@ export async function spawnSubagent(
 		args.push("--no-session");
 	} else {
 		// Session enabled — auto-name with timestamp + agent name
+		// Use full file path with .jsonl extension (pi --session <path> creates/opens file)
 		const sessionDir = finalSessionDir || ".pi-dev-output/pi-subagent-sessions";
 		const safeAgentName = agent.name.replace(/[^a-zA-Z0-9_-]/g, "_");
 		const ts = new Date().toISOString().replace(/[:.]/g, "-");
 		const wfSuffix = override.workflowId ? `_${override.workflowId}` : "";
 		const sessionName = `${ts}_${safeAgentName}${wfSuffix}`;
-		args.push("--session-dir", sessionDir);
-		args.push("--session", sessionName);
+		// Ensure session directory exists before spawning subagent
+		try {
+			fs.mkdirSync(sessionDir, { recursive: true });
+		} catch { /* ignore if already exists */ }
+		const sessionPath = path.join(sessionDir, `${sessionName}.jsonl`);
+		args.push("--session", sessionPath);
 	}
 
 	if (finalNoContext)    args.push("-nc");

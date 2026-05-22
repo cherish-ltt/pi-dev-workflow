@@ -619,6 +619,11 @@ function buildReviewTask(
 		'{"maxSeverity":"critical|medium|low","critical":N,"medium":N,"low":N}',
 		"[/REVIEW_SUMMARY]",
 		"",
+		"⚠️ 重要：这个 JSON 摘要不是可选的，而是强制性的。",
+		"如果缺少此 JSON 摘要，工作流将无法判断是否需要继续修复循环。",
+		"请在回复的末尾单独输出，确保前后无其他文本（除换行符外）。",
+		"注意最大严重级别字段名是 maxSeverity（注意大小写）。",
+		"",
 		"## 功能需求",
 		prompt,
 	];
@@ -1300,6 +1305,35 @@ async function executeSingleStep(
 
 	if (result.exitCode !== 0 && result.stderr) {
 		throw new Error(`Agent 错误 (exit ${result.exitCode}): ${result.stderr.slice(0, 500)}`);
+	}
+
+	// ── Capture chain context for single-step agents ──
+	const agentChanges = _workflowFileChanges
+		.filter(c => c.stepIndex === stepIndex && c.agent === agentName)
+		.map(c => `${c.type === "new" ? "A" : c.type === "delete" ? "D" : "M"}   ${c.filePath}`);
+
+	let chainKey: string;
+	if (agentName === "planner") chainKey = "计划制定摘要";
+	else if (agentName === "docWriter") chainKey = "文档更新摘要";
+	else chainKey = `${agentName} 执行摘要`;
+
+	if (agentChanges.length > 0) {
+		const editCount = agentChanges.filter(c => c.startsWith("M")).length;
+		const newCount = agentChanges.filter(c => c.startsWith("A")).length;
+		const delCount = agentChanges.filter(c => c.startsWith("D")).length;
+		const statsParts: string[] = [];
+		if (editCount > 0) statsParts.push(`修改 ${editCount} 个`);
+		if (newCount > 0) statsParts.push(`新增 ${newCount} 个`);
+		if (delCount > 0) statsParts.push(`删除 ${delCount} 个`);
+		const statsLine = statsParts.length > 0 ? `改动统计: ${statsParts.join("，")}\n\n` : "";
+
+		updateChainContext(chainKey,
+			`${agentName} 已完成。\n` +
+			statsLine +
+			`变更文件列表:\n${agentChanges.join("\n")}`
+		);
+	} else {
+		updateChainContext(chainKey, `${agentName} 已完成执行，未检测到文件变更。`);
 	}
 }
 

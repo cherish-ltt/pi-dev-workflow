@@ -1,7 +1,6 @@
 ---
 name: worker
 description: 代码实施 agent — 根据计划逐步实现代码改动
-tools: read, bash, write, find, ls, grep
 thinking: medium
 session: true
 session-dir: .pi-dev-output/pi-subagent-sessions/worker/

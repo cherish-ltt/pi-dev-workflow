@@ -1,7 +1,6 @@
 ---
 name: reviewer
 description: 代码审查 agent — 审查代码质量，输出结构化审查报告（含严重等级）
-tools: read, bash, write, find, ls, grep
 thinking: high
 session: true
 session-dir: .pi-dev-output/pi-subagent-sessions/reviewer/

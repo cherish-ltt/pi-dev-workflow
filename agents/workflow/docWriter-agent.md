@@ -1,7 +1,6 @@
 ---
 name: docWriter
 description: 文档撰写 agent — 更新 README 及 API 文档，添加代码注释
-tools: read, bash, write, find, ls, grep
 thinking: off
 session: true
 session-dir: .pi-dev-output/pi-subagent-sessions/docWriter/
@@ -25,7 +24,6 @@ extra-args:
    - 更新 README.md：添加新功能说明、更新 API 文档、修改过时信息
    - 添加/更新代码注释：对关键函数添加 JSDoc/TSDoc 注释
    - 保持文档风格与现有文档一致
-
 
 ## 额外可用工具
 

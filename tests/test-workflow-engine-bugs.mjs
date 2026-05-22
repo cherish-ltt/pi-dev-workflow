@@ -485,6 +485,176 @@ if (escCommentMatch) {
 }
 
 
+console.log("\n═══ Bug G 测试 — 链上下文传递 (executeSingleStep) ═══\n");
+
+// ── Test G1: executeSingleStep 中包含链上下文捕获逻辑 ──
+console.log("📋 测试 G1: executeSingleStep 中有 chain context 捕获\n");
+
+const singleStepFuncStart = source.indexOf("async function executeSingleStep");
+assert(singleStepFuncStart !== -1, "找到 executeSingleStep 函数");
+const singleStepEndSearch = source.indexOf("async function executeLoopGroup", singleStepFuncStart);
+const fullSingleStep = source.slice(singleStepFuncStart, singleStepEndSearch);
+
+const hasChainContextKey = fullSingleStep.includes('chainKey');
+assertTrue(hasChainContextKey, "executeSingleStep 中有 chainKey 变量");
+
+const hasUpdateChainContext = fullSingleStep.includes('updateChainContext(chainKey');
+assertTrue(hasUpdateChainContext, "executeSingleStep 中调用 updateChainContext");
+
+const hasPlannerKey = fullSingleStep.includes('"计划制定摘要"');
+assertTrue(hasPlannerKey, "agentName === planner 时使用 '计划制定摘要' key");
+
+const hasDocWriterKey = fullSingleStep.includes('"文档更新摘要"');
+assertTrue(hasDocWriterKey, "agentName === docWriter 时使用 '文档更新摘要' key");
+
+
+console.log("\n═══ Bug H 测试 — Agent 前置元数据解析 ═══\n");
+
+// ── Test H1: 所有 workflow agent 的 session 已启用（可追溯） ──
+console.log("📋 测试 H1: 所有 workflow agent 的 session 已启用（session: true）\n");
+
+const agentFiles = [
+	"agents/workflow/planner-agent.md",
+	"agents/workflow/worker-agent.md",
+	"agents/workflow/reviewer-agent.md",
+	"agents/workflow/trimmer-agent.md",
+	"agents/workflow/docWriter-agent.md",
+	"agents/review-agent.md",
+];
+for (const af of agentFiles) {
+	const agentPath = path.resolve(__dirname, "..", af);
+	if (fs.existsSync(agentPath)) {
+		const content = fs.readFileSync(agentPath, "utf-8");
+		const hasSessionTrue = content.includes("session: true");
+		assertTrue(hasSessionTrue, `${af} 包含 session: true`);
+		const hasSessionFalse = content.includes("session: false");
+		assertFalse(hasSessionFalse, `${af} 不包含 session: false`);
+	} else {
+		console.log(`  ℹ️  跳过不存在的文件: ${af}`);
+	}
+}
+
+// ── Test H2: 所有 workflow agent 有 MCP/SKILL 可用声明（工具白名单已移除 → MCP 实际可用） ──
+console.log("\n📋 测试 H2: workflow agent 包含 MCP/SKILL 可用声明（白名单已移除，MCP 实际可用）\n");
+
+const workflowAgentFiles = [
+	"agents/workflow/planner-agent.md",
+	"agents/workflow/worker-agent.md",
+	"agents/workflow/reviewer-agent.md",
+	"agents/workflow/trimmer-agent.md",
+	"agents/workflow/docWriter-agent.md",
+];
+for (const af of workflowAgentFiles) {
+	const agentPath = path.resolve(__dirname, "..", af);
+	if (fs.existsSync(agentPath)) {
+		const content = fs.readFileSync(agentPath, "utf-8");
+		const hasExtraToolsSection = content.includes("## 额外可用工具");
+		assertTrue(hasExtraToolsSection, `${af} 包含 '## 额外可用工具' 节`);
+		const hasMcpClaim = content.includes("MCP");
+		assertTrue(hasMcpClaim, `${af} 包含 MCP 声明`);
+		const hasSkillClaim = content.includes("SKILL");
+		assertTrue(hasSkillClaim, `${af} 包含 SKILL 声明`);
+	} else {
+		console.log(`  ℹ️  跳过不存在的文件: ${af}`);
+	}
+}
+
+// ── Test H3: workflow agent 没有 tools 白名单（以允许 MCP 工具） ──
+console.log("\n📋 测试 H3: workflow agent 没有 tools 白名单限制\n");
+
+for (const af of workflowAgentFiles) {
+	const agentPath = path.resolve(__dirname, "..", af);
+	if (fs.existsSync(agentPath)) {
+		const content = fs.readFileSync(agentPath, "utf-8");
+		// Should NOT have a tools: line in frontmatter
+		const hasToolsLine = /^tools:/.test(content.split("---")?.[1] ?? "");
+		assertFalse(hasToolsLine, `${af} 无 tools: 行（白名单已移除）`);
+	} else {
+		console.log(`  ℹ️  跳过不存在的文件: ${af}`);
+	}
+}
+
+// ── Test H4: sub-agents.ts 中 session 使用完整路径 + .jsonl ──
+console.log("\n📋 测试 H4: sub-agents.ts session 路径构造\n");
+
+const subAgentSource = fs.readFileSync(path.resolve(__dirname, "../extensions/sub-agents.ts"), "utf-8");
+const hasMkdirSync = subAgentSource.includes("fs.mkdirSync(sessionDir");
+assertTrue(hasMkdirSync, "spawnSubagent 创建 session 目录");
+const hasJsonlPath = subAgentSource.includes(".jsonl");
+assertTrue(hasJsonlPath, "session 文件路径包含 .jsonl 扩展名");
+const hasSessionPath = subAgentSource.includes("path.join(sessionDir");
+assertTrue(hasSessionPath, "使用 path.join 构建完整 session 路径");
+const noSessionDirArg = subAgentSource.includes("--session-dir");
+assertFalse(noSessionDirArg, "不再使用 --session-dir（改用完整路径 --session）");
+
+// ── Test H5: Agent frontmatter 字段解析正确 ──
+console.log("\n📋 测试 H5: Agent frontmatter 字段解析\n");
+
+// subAgentSource 已在 H4 中声明，此处直接复用
+
+const hasThinkingField = subAgentSource.includes('fields.thinking');
+assertTrue(hasThinkingField, "loadAgent 解析 thinking 字段");
+
+const hasSessionField = subAgentSource.includes('fields.session');
+assertTrue(hasSessionField, "loadAgent 解析 session 字段");
+
+const hasSessionDirField = subAgentSource.includes('fields["session-dir"]');
+assertTrue(hasSessionDirField, "loadAgent 解析 session-dir 字段");
+
+const hasNoContextField = subAgentSource.includes('fields["no-context"]');
+assertTrue(hasNoContextField, "loadAgent 解析 no-context 字段");
+
+const hasNoExtensionsField = subAgentSource.includes('fields["no-extensions"]');
+assertTrue(hasNoExtensionsField, "loadAgent 解析 no-extensions 字段");
+
+const hasExtraArgsField = subAgentSource.includes('fields["extra-args"]');
+assertTrue(hasExtraArgsField, "loadAgent 解析 extra-args 字段");
+
+
+console.log("\n═══ Bug I 测试 — 工作流 UUID 溯源机制 ═══\n");
+
+// ── Test I1: workflowId 注入到 buildTaskForStep ──
+console.log("📋 测试 I1: buildTaskForStep 接收 workflowId 参数\n");
+
+const bldFuncStart = source.indexOf("function buildTaskForStep");
+assert(bldFuncStart !== -1, "找到 buildTaskForStep 函数");
+const bldFuncParams = source.slice(bldFuncStart, bldFuncStart + 300);
+
+const hasWorkflowIdParam = bldFuncParams.includes("workflowId");
+assertTrue(hasWorkflowIdParam, "buildTaskForStep 接收 workflowId 参数");
+
+const hasChainContextParam = bldFuncParams.includes("chainContext");
+assertTrue(hasChainContextParam, "buildTaskForStep 接收 chainContext 参数");
+
+// ── Test I2: CheckpointData 包含 workflowId ──
+console.log("\n📋 测试 I2: CheckpointData 包含 workflowId\n");
+
+const checkpointDataMatch = source.match(/interface CheckpointData [\s\S]{0,500}workflowId/);
+assertNotNull(checkpointDataMatch, "CheckpointData 接口包含 workflowId");
+
+// ── Test I3: buildWorkflowInfoBlock 函数存在 ──
+console.log("\n📋 测试 I3: buildWorkflowInfoBlock 函数存在\n");
+
+const hasBuildWorkflowInfoBlock = source.includes("function buildWorkflowInfoBlock");
+assertTrue(hasBuildWorkflowInfoBlock, "buildWorkflowInfoBlock 函数存在");
+
+// ── Test I4: buildReviewTask 也接收 workflowId ──
+console.log("\n📋 测试 I4: buildReviewTask 接收 workflowId\n");
+
+const reviewTaskStart = source.indexOf("function buildReviewTask");
+assert(reviewTaskStart !== -1, "找到 buildReviewTask 函数");
+const reviewTaskParams = source.slice(reviewTaskStart, reviewTaskStart + 200);
+const reviewHasWorkflowId = reviewTaskParams.includes("workflowId");
+assertTrue(reviewHasWorkflowId, "buildReviewTask 接收 workflowId 参数");
+
+
+console.log("\n=== 增强功能测试汇总 ===\n");
+console.log("📋 附加测试覆盖:");
+console.log("  - G: 链上下文传递 (executeSingleStep)");
+console.log("  - H: Agent 前置元数据解析 + MCP/SKILL 移除");
+console.log("  - I: 工作流 UUID 溯源机制");
+
+
 console.log("\n═══════════════════════════════════════════════════════\n");
 console.log(`📊 结果: ${pass} 通过, ${fail} 失败\n`);
 

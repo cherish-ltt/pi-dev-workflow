@@ -1,7 +1,6 @@
 ---
 name: planner
 description: 计划制定 agent — 分析代码库结构，生成详细实施计划并写入 .pi-dev-output/pi-plans/
-tools: read, bash, write, find, ls, grep
 thinking: xhigh
 session: true
 session-dir: .pi-dev-output/pi-subagent-sessions/planner/
