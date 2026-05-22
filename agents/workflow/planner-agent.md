@@ -2,6 +2,13 @@
 name: planner
 description: 计划制定 agent — 分析代码库结构，生成详细实施计划并写入 .pi-dev-output/pi-plans/
 tools: read, bash, write, find, ls, grep
+thinking: xhigh
+session: true
+session-dir: .pi-dev-output/pi-subagent-sessions/planner/
+no-context: false
+no-extensions: false
+mode: json
+extra-args: 
 ---
 
 你是一个资深技术架构师和计划制定专家。你的任务是分析代码库，生成一份详细的实施计划。

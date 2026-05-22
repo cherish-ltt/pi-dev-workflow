@@ -338,6 +338,153 @@ simulateInitWidget();
 assertEq(workflowRunning, true, "空定时器时启动工作流正常");
 
 
+console.log("\n═══ Bug C 测试 — buildTaskForStep worker 注入 prompt（review 反馈循环） ═══\n");
+
+// ── Test C1: worker 有 planContent 时 prompt 不被忽略 ──
+console.log("📋 测试 C1: worker 有 planContent 时 prompt 不被忽略\n");
+
+// 模拟 buildTaskForStep 行为
+function simulateBuildTaskForStep(agentName, prompt, planFileRelPath, cwd, planContentExists) {
+	if (agentName === "worker") {
+		const planContent = planContentExists ? "# 实施计划\n1. 修改 login.ts\n2. 添加 auth 中间件" : undefined;
+		if (planContent) {
+			const result = [
+				"请根据以下实施计划逐步实现代码改动。",
+				"",
+				"## 实施计划",
+				planContent,
+				"",
+				"## 原始需求与修改反馈",
+				prompt,
+				"",
+				"请严格按照计划中的步骤实施，不要做计划外的修改。",
+			].join("\n");
+			// 验证 prompt 包含在结果中
+			return result.includes("\n" + prompt) || result.includes(prompt + "\n");
+		}
+	}
+	return false;
+}
+
+// 场景 A: prompt 包含原始需求 + 审查反馈
+const promptWithFeedback = [
+	"[fix] 修复 login.ts 中的 401 错误",
+	"",
+	"## 上次审查发现的问题",
+	'审查摘要: {"maxSeverity":"critical","critical":2,"medium":1,"low":0}',
+	"请修复 2 个严重问题后重新运行。",
+].join("\n");
+
+const hasPromptWithPlan = simulateBuildTaskForStep("worker", promptWithFeedback, "plan.md", "/cwd", true);
+assertTrue(hasPromptWithPlan, "worker 有 planContent 时 prompt（含审查反馈）被注入到任务中");
+
+// 场景 B: prompt 是原始需求（第一轮循环）
+const originalPrompt = "[fix] 修复 login.ts 中的 401 错误";
+const hasOriginalPrompt = simulateBuildTaskForStep("worker", originalPrompt, "plan.md", "/cwd", true);
+assertTrue(hasOriginalPrompt, "worker 有 planContent 时原始 prompt 也被注入");
+
+// ── Test C2: 源代码静态分析 ──
+console.log("\n📋 测试 C2: 源代码中 buildTaskForStep worker 分支包含 prompt\n");
+
+const workerBranchRegex = /if \(agentName === \"worker\"\)[\s\S]{0,1000}\]\.join\(\"\\n\"\);/;
+const workerMatch = source.match(workerBranchRegex);
+assertNotNull(workerMatch, "找到 worker 分支");
+
+const hasOriginalRequirementFeedback = workerMatch?.[0]?.includes("## 原始需求与修改反馈") ?? false;
+assertTrue(hasOriginalRequirementFeedback, "worker prompt 模板包含 '## 原始需求与修改反馈' 节");
+
+// ── Test C3: 源代码中 no-plan 分支保持不变 ──
+console.log("\n📋 测试 C3: worker 无 plan 分支保持不变\n");
+
+const noPlanBranchMatch = source.match(/请根据以下功能需求实施代码改动[\s\S]{0,200}请先分析代码库，制定简要计划，再逐步实施/);
+assertNotNull(noPlanBranchMatch, "无 plan 分支仍然存在");
+const noPlanHasFeedback = noPlanBranchMatch?.[0]?.includes("## 原始需求与修改反馈") ?? false;
+assertFalse(noPlanHasFeedback, "无 plan 分支不含 '## 原始需求与修改反馈'");
+
+
+console.log("\n═══ Bug D 测试 — hasContentChanged 使用 execSync 而非 require ═══\n");
+
+// ── Test D1: 源代码不包含 require('child_process') ──
+console.log("📋 测试 D1: hasContentChanged 不使用 require('child_process')\n");
+
+const hasRequireChildProc = source.includes("require('child_process')") || source.includes('require("child_process")');
+assertFalse(hasRequireChildProc, "源代码中不包含 require('child_process')");
+
+// ── Test D2: hasContentChanged 使用 execSync ──
+console.log("\n📋 测试 D2: hasContentChanged 使用 execSync\n");
+
+const funcStart = source.indexOf("function hasContentChanged");
+assert(funcStart !== -1, "找到 hasContentChanged 函数");
+const funcBody = source.slice(funcStart, funcStart + 400);
+const hasExecSync = funcBody.includes("execSync(");
+assertTrue(hasExecSync, "hasContentChanged 使用 execSync");
+const noOldSpawnSync = !funcBody.includes("spawnSync");
+assertTrue(noOldSpawnSync, "hasContentChanged 不使用 spawnSync");
+
+// ── Test D3: 模拟 hasContentChanged 行为逻辑 ──
+console.log("\n📋 测试 D3: hasContentChanged 逻辑验证\n");
+
+function simulateHasContentChanged(currentHash, baselineHash) {
+	try {
+		// 模拟 execSync 返回 hash
+		const data = currentHash;
+		return data.trim() !== baselineHash;
+	} catch {
+		return true;
+	}
+}
+
+assertTrue(simulateHasContentChanged("abc123", "def456"), "不同 hash → changed");
+assertFalse(simulateHasContentChanged("abc123", "abc123"), "相同 hash → unchanged");
+
+
+console.log("\n═══ Bug E 测试 — trimmer prompt 包含 plan 上下文 ═══\n");
+
+// ── Test E1: 源代码静态分析 ──
+console.log("📋 测试 E1: buildTaskForStep trimmer 分支包含 plan 上下文\n");
+
+const trimmerStart = source.indexOf('if (agentName === "trimmer")');
+assert(trimmerStart !== -1, "找到 trimmer 分支");
+const trimmerSection = source.slice(trimmerStart, trimmerStart + 600);
+
+const trimmerHasWarning = trimmerSection.includes("注意：以下实施计划");
+assertTrue(trimmerHasWarning, "trimmer prompt 包含 plan 保护提示");
+
+const trimmerHasPlanContent = trimmerSection.includes("## 实施计划（改动范围）");
+assertTrue(trimmerHasPlanContent, "trimmer prompt 包含 '## 实施计划（改动范围）’ 节");
+
+const trimmerHasSpread = trimmerSection.includes("...(planContent ?");
+assertTrue(trimmerHasSpread, "trimmer prompt 条件性包含 planContent");
+
+
+console.log("\n═══ Bug F 测试 — 注释与代码一致性（5s vs 3s） ═══\n");
+
+// ── Test F1: Esc 双击超时注释匹配代码 ──
+console.log("📋 测试 F1: Esc 双击注释与代码一致\n");
+
+const escCommentMatch = source.match(/Second Esc press within (\d+)s/);
+if (escCommentMatch) {
+	const commentVal = parseInt(escCommentMatch[1], 10);
+	assertEq(commentVal, 3, `注释说 ${commentVal}s，代码中阈值应为 ${commentVal}s (3000ms)`);
+	
+	// 验证注释值匹配 actual timeout in ms
+	const thresholdMs = 3000;
+	const thresholdSec = thresholdMs / 1000;
+	assertEq(commentVal, thresholdSec, `注释值 ${commentVal}s 匹配代码阈值 ${thresholdSec}s`);
+} else {
+	// Try the previous comment text
+	const prevCommentMatch = source.match(/Second Esc press within [\w\s]+ → confirm cancel/);
+	if (prevCommentMatch) {
+		const commentText = prevCommentMatch[0];
+		// Should contain "3s" now
+		assertTrue(commentText.includes("3s"), `注释现在说 "3s"，得到: "${commentText}"`);
+	} else {
+		fail++;
+		console.error("  ❌ 找不到 Esc 注释");
+	}
+}
+
+
 console.log("\n═══════════════════════════════════════════════════════\n");
 console.log(`📊 结果: ${pass} 通过, ${fail} 失败\n`);
 

@@ -2,6 +2,13 @@
 name: dev-prd-agent
 description: PRD 编写 agent — 根据对话上下文合成 PRD 文档
 tools: read, bash
+thinking: high
+session: false
+session-dir: 
+no-context: false
+no-extensions: false
+mode: json
+extra-args: 
 ---
 
 你是一名资深产品规格文档撰写专家。

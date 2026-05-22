@@ -111,6 +111,15 @@ function osHomedir(): string {
 	}
 }
 
+/** Parse boolean-like frontmatter values: true/yes/1, false/no/0, or undefined. */
+function parseBool(val: string | undefined): boolean | undefined {
+	if (val === undefined) return undefined;
+	const lc = val.toLowerCase().trim();
+	if (lc === "true" || lc === "yes" || lc === "1") return true;
+	if (lc === "false" || lc === "no" || lc === "0") return false;
+	return undefined;
+}
+
 // ── Process lifecycle management ─────────────────────────────
 //
 // Fix #1: Prevent orphan sub-agents when pi exits or crashes.
@@ -172,6 +181,22 @@ export interface AgentDef {
 	systemPrompt: string;
 	/** Custom timeout in ms for this agent type. */
 	timeoutMs?: number;
+
+	// ── Subprocess CLI args (from frontmatter) ──
+	/** Thinking level: "off" | "low" | "medium" | "high" | "xhigh" */
+	thinkingLevel?: string;
+	/** Persist session (default: false = --no-session) */
+	session?: boolean;
+	/** Session directory override */
+	sessionDir?: string;
+	/** Skip context files AGENTS.md/CLAUDE.md (default: true = -nc) */
+	noContext?: boolean;
+	/** Disable extension loading (default: true = -ne) */
+	noExtensions?: boolean;
+	/** Output mode: "json" | "text" (default: "json") */
+	mode?: string;
+	/** Extra raw CLI args to append */
+	extraArgs?: string[];
 }
 
 export interface SubagentResult {
@@ -180,6 +205,31 @@ export interface SubagentResult {
 	stderr: string;
 	/** How long the subagent ran (ms). */
 	durationMs: number;
+}
+
+/**
+ * Caller-provided overrides for subprocess CLI args.
+ * Each field, when set, takes precedence over the AgentDef (frontmatter) value.
+ */
+export interface SubagentArgs {
+	/** Override thinking level */
+	thinkingLevel?: string;
+	/** Override session persistence */
+	session?: boolean;
+	/** Override session directory */
+	sessionDir?: string;
+	/** Override -nc (no context files) */
+	noContext?: boolean;
+	/** Override -ne (no extensions) */
+	noExtensions?: boolean;
+	/** Override --mode */
+	mode?: string;
+	/** Override --tools whitelist */
+	tools?: string[];
+	/** Extra --append-system-prompt (appended after agent's own) */
+	appendSystemPrompt?: string;
+	/** Extra raw CLI args (appended last, highest priority) */
+	extraArgs?: string[];
 }
 
 function inferTimeout(name: string): number {
@@ -201,7 +251,7 @@ function loadAgent(filePath: string): AgentDef | null {
 
 		const fields: Record<string, string> = {};
 		for (const line of frontRaw.split("\n")) {
-			const m = line.match(/^(\w+):\s*(.*)$/);
+			const m = line.match(/^([\w-]+):\s*(.*)$/);
 			if (m) fields[m[1]] = m[2];
 		}
 
@@ -214,6 +264,14 @@ function loadAgent(filePath: string): AgentDef | null {
 			tools: tools && tools.length > 0 ? tools : undefined,
 			systemPrompt: body,
 			timeoutMs: inferTimeout(fields.name),
+			// ── Subprocess args from frontmatter ──
+			thinkingLevel: fields.thinking || undefined,
+			session: parseBool(fields.session),
+			sessionDir: fields["session-dir"] || undefined,
+			noContext: parseBool(fields["no-context"]),
+			noExtensions: parseBool(fields["no-extensions"]),
+			mode: fields.mode || undefined,
+			extraArgs: fields["extra-args"] ? fields["extra-args"].split(/\s+/).filter(Boolean) : undefined,
 		};
 	} catch {
 		return null;
@@ -270,8 +328,9 @@ export function discoverAgents(): AgentDef[] {
 // Fix #2: Simplified settle logic - no listener manipulation races.
 //   Buffer is capped at MAX_BUFFER_BYTES to prevent OOM on runaway output.
 // Fix #3: onProgress callback streams sub-agent output in real-time.
-// Fix #4: -nc (no context files), -ne (no extensions) to reduce startup overhead.
-//   Auto-load append.system.md. Thinking=off for faster responses.
+// Fix #4: Subprocess CLI args are resolved from caller > AgentDef frontmatter > defaults.
+//   Defaults: -nc, -ne, --no-session, --mode json, --thinking off.
+//   Auto-load append.system.md for project-level instructions.
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	const currentScript = process.argv[1];
@@ -294,31 +353,57 @@ export async function spawnSubagent(
 	signal?: AbortSignal,
 	timeoutMs?: number,
 	onProgress?: (msg: string) => void,
+	argsOverride?: SubagentArgs,
 ): Promise<SubagentResult> {
 	const effectiveTimeout = timeoutMs ?? agent.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const systemPrompt = agent.systemPrompt.trim();
 
+	// ── Resolve arg overrides (caller > AgentDef frontmatter > hardcoded default) ──
+	const override = (argsOverride as SubagentArgs) ?? {};
+
+	const finalThinking      = override.thinkingLevel ?? agent.thinkingLevel ?? "off";
+	const finalSession       = override.session       ?? agent.session       ?? false;
+	const finalSessionDir    = override.sessionDir    ?? agent.sessionDir;
+	const finalNoContext     = override.noContext     ?? agent.noContext     ?? true;
+	const finalNoExtensions  = override.noExtensions  ?? agent.noExtensions  ?? true;
+	const finalMode          = override.mode          ?? agent.mode          ?? "json";
+	const finalTools         = override.tools         ?? agent.tools;
+	const finalExtraArgs     = override.extraArgs     ?? agent.extraArgs;
+
 	// Build pi arguments for the subagent
-	const args: string[] = [
-		"-p",                        // non-interactive
-		"--no-session",              // ephemeral
-		"-nc",                       // no context files (AGENTS.md / CLAUDE.md)
-		"-ne",                       // no extensions (less startup overhead)
-		"--mode", "json",            // structured output
-	];
+	const args: string[] = ["-p"]; // non-interactive
 
-	// Sub-agents don't need high thinking - off for speed
-	// (system prompt + task text provides enough context)
-	args.push("--thinking", "off");
-
-	// Only grant the tools the agent needs
-	if (agent.tools && agent.tools.length > 0) {
-		args.push("--tools", agent.tools.join(","));
+	if (!finalSession) {
+		args.push("--no-session");
+	} else {
+		// Session enabled — auto-name with timestamp + agent name
+		const sessionDir = finalSessionDir || ".pi-dev-output/pi-subagent-sessions";
+		const safeAgentName = agent.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+		const ts = new Date().toISOString().replace(/[:.]/g, "-");
+		const sessionName = `${ts}_${safeAgentName}`;
+		args.push("--session-dir", sessionDir);
+		args.push("--session", sessionName);
 	}
 
-	// Append agent system prompt
+	if (finalNoContext)    args.push("-nc");
+	if (finalNoExtensions) args.push("-ne");
+
+	args.push("--mode", finalMode);
+	args.push("--thinking", finalThinking);
+
+	// Only grant the tools the agent needs
+	if (finalTools && finalTools.length > 0) {
+		args.push("--tools", finalTools.join(","));
+	}
+
+	// Append agent system prompt (from AgentDef markdown body)
 	if (systemPrompt) {
 		args.push("--append-system-prompt", systemPrompt);
+	}
+
+	// Caller override system prompt (appended after agent's own)
+	if (override.appendSystemPrompt) {
+		args.push("--append-system-prompt", override.appendSystemPrompt);
 	}
 
 	// Auto-load append.system.md (global or project-level)
@@ -330,6 +415,11 @@ export async function spawnSubagent(
 		}
 	} catch {
 		// fail silently
+	}
+
+	// Extra raw args appended last (highest priority)
+	if (finalExtraArgs && finalExtraArgs.length > 0) {
+		args.push(...finalExtraArgs);
 	}
 
 	// The task itself
@@ -599,6 +689,14 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			agent: Type.String({ description: "Name of the agent to invoke" }),
 			task: Type.String({ description: "Task description to delegate" }),
+			// Optional overrides (pass-through to SubagentArgs)
+			thinkingLevel: Type.Optional(Type.String({ description: "Override thinking level: off | low | medium | high | xhigh" })),
+			session: Type.Optional(Type.Boolean({ description: "Override session persistence" })),
+			noContext: Type.Optional(Type.Boolean({ description: "Override -nc (skip AGENTS.md/CLAUDE.md)" })),
+			noExtensions: Type.Optional(Type.Boolean({ description: "Override -ne (disable extensions)" })),
+			mode: Type.Optional(Type.String({ description: "Override output mode: json | text" })),
+			tools: Type.Optional(Type.String({ description: "Override tool whitelist (comma-separated)" })),
+			extraArgs: Type.Optional(Type.String({ description: "Extra raw CLI args (space-separated)" })),
 		}),
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const agent = agents.find((a) => a.name === params.agent);
@@ -616,6 +714,16 @@ export default function (pi: ExtensionAPI) {
 			// Fix #3: Report progress via onUpdate
 			onUpdate?.({ state: "running", message: `🤖 正在委派 ${agent.name} 处理...` });
 
+			// Build SubagentArgs from optional tool params
+			const toolArgs: SubagentArgs = {};
+			if (params.thinkingLevel !== undefined) toolArgs.thinkingLevel = params.thinkingLevel as string;
+			if (params.session !== undefined) toolArgs.session = params.session as boolean;
+			if (params.noContext !== undefined) toolArgs.noContext = params.noContext as boolean;
+			if (params.noExtensions !== undefined) toolArgs.noExtensions = params.noExtensions as boolean;
+			if (params.mode !== undefined) toolArgs.mode = params.mode as string;
+			if (params.tools !== undefined) toolArgs.tools = (params.tools as string).split(",").map(t => t.trim()).filter(Boolean);
+			if (params.extraArgs !== undefined) toolArgs.extraArgs = (params.extraArgs as string).split(/\s+/).filter(Boolean);
+
 			const result = await spawnSubagent(
 				agent,
 				params.task,
@@ -625,6 +733,7 @@ export default function (pi: ExtensionAPI) {
 				(progress) => {
 					onUpdate?.({ state: "running", message: progress });
 				},
+				Object.keys(toolArgs).length > 0 ? toolArgs : undefined,
 			);
 			const output = extractFinalOutput(result.output);
 			const dur = (result.durationMs / 1000).toFixed(1);

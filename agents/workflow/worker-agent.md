@@ -2,6 +2,13 @@
 name: worker
 description: 代码实施 agent — 根据计划逐步实现代码改动
 tools: read, bash, write, find, ls, grep
+thinking: medium
+session: true
+session-dir: .pi-dev-output/pi-subagent-sessions/worker/
+no-context: false
+no-extensions: false
+mode: json
+extra-args: 
 ---
 
 你是一个资深软件工程师。你的任务是严格按照实施计划实现代码。

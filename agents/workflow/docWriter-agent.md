@@ -2,6 +2,13 @@
 name: docWriter
 description: 文档撰写 agent — 更新 README 及 API 文档，添加代码注释
 tools: read, bash, write, find, ls, grep
+thinking: off
+session: true
+session-dir: .pi-dev-output/pi-subagent-sessions/docWriter/
+no-context: false
+no-extensions: false
+mode: json
+extra-args: 
 ---
 
 你是一个技术文档工程师。你的任务是根据代码库的最新状态以及从最近几次git-commit或git-diff中的改动，更新 README 和必要的代码注释。

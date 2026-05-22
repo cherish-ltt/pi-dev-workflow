@@ -372,7 +372,7 @@ function toGitStatus(toolType: string): string {
  */
 function hasContentChanged(cwd: string, path: string, baselineHash: string): boolean {
 	try {
-		const currentHash = require('child_process').spawnSync('git', ['hash-object', path], { cwd, encoding: 'utf8', timeout: 3000 }).stdout?.trim() || "";
+		const currentHash = execSync(`git hash-object "${path}"`, { cwd, encoding: 'utf8', timeout: 3000 }).trim();
 		return currentHash !== baselineHash;
 	} catch {
 		// file deleted or inaccessible — consider changed
@@ -528,6 +528,9 @@ function buildTaskForStep(
 				"## 实施计划",
 				planContent,
 				"",
+				"## 原始需求与修改反馈",
+				prompt,
+				"",
 				"请严格按照计划中的步骤实施，不要做计划外的修改。",
 			].join("\n");
 		}
@@ -541,12 +544,15 @@ function buildTaskForStep(
 		].join("\n");
 	}
 	if (agentName === "trimmer") {
+		const planContent = planFileRelPath ? readFileContent(cwd, planFileRelPath) : undefined;
 		return [
 			"请精简当前代码库的代码。",
 			"缩短不必要的冗长行，优化可读性，消除可合并的重复逻辑。",
+			"注意：以下实施计划列出了本次工作流的核心新增内容，精简时请确保不影响这些改动。",
 			"",
 			"## 原始功能需求",
 			prompt,
+			...(planContent ? ["", "## 实施计划（改动范围）", planContent] : []),
 		].join("\n");
 	}
 	if (agentName === "docWriter") {
@@ -1756,7 +1762,7 @@ export async function runWorkflow(
 			if (_workflowRunning && _workflowAbortController && !_workflowAbortController.signal.aborted) {
 				const now = Date.now();
 				if (_lastEscPressTime > 0 && now - _lastEscPressTime < 3000) {
-					// Second Esc press within 5s → confirm cancel
+					// Second Esc press within 3s → confirm cancel
 					ctx.ui.notify("⏹️ 正在停止工作流...", "warning");
 					cancelWorkflow();
 					_lastEscPressTime = 0;

@@ -2,6 +2,13 @@
 name: reviewer
 description: 代码审查 agent — 审查代码质量，输出结构化审查报告（含严重等级）
 tools: read, bash, write, find, ls, grep
+thinking: high
+session: true
+session-dir: .pi-dev-output/pi-subagent-sessions/reviewer/
+no-context: false
+no-extensions: false
+mode: json
+extra-args: 
 ---
 
 你是一个资深代码审查专家。你的任务是对代码库的变更进行审查，输出包含严重等级的结构化报告。
