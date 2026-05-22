@@ -545,8 +545,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                 let subDurClose = "";
                 // ⭐ 修复：已完成/失败的子代理使用记录的 durationMs，运行中使用 live 计时
                 let elapsedMs: number | undefined;
-                if (isSubDone) {
-                    // 已完成 → 使用最终记录的 durationMs（代理完成时已冻结）
+                if (isSubDone || sub.status === "failed") {
+                    // 已完成/失败 → 使用最终记录的 durationMs（代理完成时已冻结）
                     elapsedMs = sub.durationMs;
                 } else if (isSubRunning && sub.startedAt) {
                     // 运行中 → 实时计算从 startedAt 到现在的时长
