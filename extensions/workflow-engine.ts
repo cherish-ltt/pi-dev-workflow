@@ -1378,6 +1378,14 @@ async function executeSingleStep(
 	} else {
 		updateChainContext(chainKey, `${agentName} 已完成执行，未检测到文件变更。`);
 	}
+
+	// ── Capture AI work summary as supplementary chain context ──
+	const workSummary = extractFinalOutput(result.output);
+	if (workSummary) {
+		updateChainContext(`${agentName} 工作总结`,
+			`${agentName} 已完成工作，以下是其工作总结：\n\n${workSummary}`
+		);
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1471,6 +1479,14 @@ async function executeLoopGroup(
 			);
 		}
 
+		// ── Capture loop agent work summary as supplementary chain context ──
+		const loopFinalText = extractFinalOutput(agentResult.output);
+		if (loopFinalText) {
+			updateChainContext(`${step.loopAgentName} 工作总结`,
+				`${step.loopAgentName} 已完成工作，以下是其工作总结：\n\n${loopFinalText}`
+			);
+		}
+
 		if (isTimeoutResult(agentResult)) {
 			if (mode === "full-auto") {
 				contextPrompt = `[TIMEOUT_WARNING] 上一个 ${step.loopAgentName} 执行超时。\n\n${buildReviewTask(prompt, planFileRelPath, _workflowCwd, _workflowId, buildChainContext())}`;
@@ -1523,6 +1539,14 @@ async function executeLoopGroup(
 				`${reviewStats}\n` +
 				`完整审查报告在 .pi-dev-output/pi-review/md/ 目录中，\n` +
 				`请在工作流输出目录中 grep UUID "${_workflowId}" 查找最新报告。`
+			);
+		}
+
+		// ── Capture reviewer work summary as supplementary chain context ──
+		// Reuse already-parsed extractedOutput to avoid double parsing
+		if (extractedOutput) {
+			updateChainContext(`审查工作总结`,
+				`审查者已完成审查，以下是其审查总结：\n\n${extractedOutput}`
 			);
 		}
 
