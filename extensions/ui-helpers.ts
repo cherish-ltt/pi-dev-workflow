@@ -309,6 +309,8 @@ export function uiInput(
 export interface WorkflowSubStepWidgetState {
     agent: string;
     status: "pending" | "running" | "done" | "failed";
+    /** Thinking level for this agent ("off" | "low" | "medium" | "high" | "xhigh") */
+    thinkingLevel?: string;
     /** Recent tool activity (e.g. "edit:src/main.rs", "read:config.json") */
     tools?: string[];
     /** Output file paths */
@@ -564,7 +566,8 @@ function buildWidgetLines(state: WorkflowWidgetState, theme: Theme, expanded: bo
                     subDurClose = dim(theme, ")");
                 }
                 const agentConnector = dim(theme, "|__");
-                lines.push(`${agentIndent}${agentConnector} ${subIcon} ${sub.agent} ·${subDurStr}${subTimeoutStr}${subDurClose}`);
+                const thinkingTag = sub.thinkingLevel ? dim(theme, `thinking-${sub.thinkingLevel} `) : "";
+                lines.push(`${agentIndent}${agentConnector} ${subIcon} ${sub.agent} · ${thinkingTag}${subDurStr}${subTimeoutStr}${subDurClose}`);
 
                 // ── Children (tools, outputs, or "正在排队") ──
                 const childItems: string[] = [];

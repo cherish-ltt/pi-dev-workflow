@@ -832,12 +832,19 @@ function populatePredefinedSubSteps(stepIndex: number): void {
 	if (step.subSteps && step.subSteps.length > 0) return; // already populated
 
 	const def = _workflowStepDefs[stepIndex]!;
+	const agents = discoverAgents();
+
+	function agentThinkingLevel(name: string): string | undefined {
+		return agents.find(a => a.name === name)?.thinkingLevel;
+	}
+
 	const newSubSteps: WorkflowSubStepWidgetState[] = [];
 
 	if (def.type === "loop-group") {
 		if (def.loopAgentName) {
 			newSubSteps.push({
 				agent: def.loopAgentName,
+				thinkingLevel: agentThinkingLevel(def.loopAgentName),
 				status: "pending",
 				tools: [],
 				outputs: [],
@@ -846,6 +853,7 @@ function populatePredefinedSubSteps(stepIndex: number): void {
 		if (def.reviewAgentName) {
 			newSubSteps.push({
 				agent: def.reviewAgentName,
+				thinkingLevel: agentThinkingLevel(def.reviewAgentName),
 				status: "pending",
 				tools: [],
 				outputs: [],
@@ -854,6 +862,7 @@ function populatePredefinedSubSteps(stepIndex: number): void {
 	} else if (def.agentName) {
 		newSubSteps.push({
 			agent: def.agentName,
+			thinkingLevel: agentThinkingLevel(def.agentName),
 			status: "pending",
 			tools: [],
 			outputs: [],
