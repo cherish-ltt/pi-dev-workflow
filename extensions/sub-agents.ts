@@ -34,7 +34,11 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 const PROGRESS_INTERVAL_MS = 1_500;
 
 /** Hard limit on accumulated output per subagent (prevents OOM on runaway). */
-const MAX_BUFFER_BYTES = 500_000;
+// Keep up to 10MB of output — large enough to hold complete session event streams
+// including cargo test compilation output (commonly 100-400 KB).
+// We preserve the END of the buffer (last N bytes) so extractFinalOutput can
+// find the final AI response even when the total output is large.
+const MAX_BUFFER_BYTES = 10_000_000;
 
 /**
  * Locations to auto-load APPEND_SYSTEM.md / append.system.md from (checked in order).
@@ -477,13 +481,14 @@ export async function spawnSubagent(
 
 		// ── Stream stdout data + immediate progress callback ──
 		// Fix #3: Flush progress on every data chunk
+		// Fix #4: Preserve the END of the buffer (last N bytes) instead of the beginning,
+		// because extractFinalOutput needs the final AI response which is at the end.
 		proc.stdout.on("data", (data: Buffer) => {
 			const chunk = data.toString();
-			if (stdout.length < MAX_BUFFER_BYTES) {
-				stdout += chunk;
-				if (stdout.length > MAX_BUFFER_BYTES) {
-					stdout = stdout.slice(0, MAX_BUFFER_BYTES);
-				}
+			stdout += chunk;
+			if (stdout.length > MAX_BUFFER_BYTES) {
+				// Keep only the last MAX_BUFFER_BYTES bytes
+				stdout = stdout.slice(stdout.length - MAX_BUFFER_BYTES);
 			}
 			// Immediate progress on new data
 			if (!settled && onProgress) {
@@ -497,11 +502,9 @@ export async function spawnSubagent(
 
 		proc.stderr.on("data", (data: Buffer) => {
 			const chunk = data.toString();
-			if (stderr.length < MAX_BUFFER_BYTES) {
-				stderr += chunk;
-				if (stderr.length > MAX_BUFFER_BYTES) {
-					stderr = stderr.slice(0, MAX_BUFFER_BYTES);
-				}
+			stderr += chunk;
+			if (stderr.length > MAX_BUFFER_BYTES) {
+				stderr = stderr.slice(stderr.length - MAX_BUFFER_BYTES);
 			}
 		});
 
@@ -573,11 +576,13 @@ export function extractFinalOutput(jsonOutput: string): string {
 				textEndSeen = true;
 			}
 
-			// Format 2: Anthropic-style message events
-			// message_stop / message_end with content array
+			// Format 2: pi agent event — message_end / message_stop / message_complete
+			// Only process assistant messages; toolResult and user messages contain
+			// raw tool output (e.g. ls -la) that would pollute the extracted summary.
 			if ((event.type === "message_stop" || event.type === "message_end" ||
 			     event.type === "message_complete") &&
-			    event.message?.content) {
+			    event.message?.content &&
+			    event.message?.role === "assistant") {
 				const parts = Array.isArray(event.message.content)
 					? event.message.content
 					: [event.message.content];
@@ -607,6 +612,46 @@ export function extractFinalOutput(jsonOutput: string): string {
 			// Format 5: text key at top level
 			if (event.type === "complete" && event.text) {
 				result = event.text;
+			}
+
+			// Format 5b: turn_end — extract text from the turn's assistant message.
+			// This provides an additional extraction point when message_end is lost
+			// due to buffer truncation (large tool results like cargo test output
+			// can push the final assistant message beyond the buffer limit).
+			if (event.type === "turn_end" &&
+			    event.message?.content &&
+			    event.message?.role === "assistant") {
+				const parts = Array.isArray(event.message.content)
+					? event.message.content
+					: [event.message.content];
+				for (const part of parts) {
+					if (typeof part === "string") result = part;
+					else if (part?.type === "text") result = part.text;
+				}
+			}
+
+			// Format 6: agent_end — iterate messages backwards to find the last
+			// assistant message with text content. This catches edge cases where
+			// the final assistant response has no type:text block (e.g. only
+			// thinking/toolCall), which left result polluted by a prior tool result.
+			if (event.type === "agent_end" && Array.isArray(event.messages)) {
+				for (let i = event.messages.length - 1; i >= 0; i--) {
+					const msg = event.messages[i];
+					if (msg?.role === "assistant" && Array.isArray(msg.content)) {
+						for (let j = msg.content.length - 1; j >= 0; j--) {
+							const block = msg.content[j];
+							if (typeof block === "string") {
+								result = block;
+								break;
+							}
+							if (block?.type === "text" && block.text) {
+								result = block.text;
+								break;
+							}
+						}
+						if (result) break;
+					}
+				}
 			}
 		} catch {
 			// If a line isn't JSON, it might be raw text output - collect it
