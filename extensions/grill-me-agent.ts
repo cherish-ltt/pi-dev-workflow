@@ -1,5 +1,5 @@
 /**
- * grill-me-agent.ts — 设计评审 (Grill) 和 PRD 生成的独立管理器
+ * grill-me-agent.ts — 设计 (Grill) 和 PRD 生成的独立管理器
  *
  * 职责：
  *   1. runGrillPhase()  — 启动 sub-agent 生成评审问题，TUI 逐题呈现（选项 + 自定义输入）
@@ -372,10 +372,10 @@ export async function runGrillPhase(
 	};
 
 	const agentDef = options?.agentDef ?? _defaultGrillAgent;
-	const confirmTitle = options?.title ?? "🔍 设计方案评审";
-	const confirmDesc = options?.description ?? "AI 会从架构、数据流、边界条件、安全等多个维度挑战你的设计。";
-	const qTitlePrefix = options?.questionTitle ?? "设计方案评审";
-	const loaderLabel = options?.loaderLabel ?? "🧠 AI 子代理正在分析代码并生成评审问题...";
+	const confirmTitle = options?.title ?? "🔍 设计方案追问完善";
+	const confirmDesc = options?.description ?? "AI 会通过系统性追问帮你打磨方案：从术语精确化到边界条件验证，确保架构决策的每个分支都经过推敲。";
+	const qTitlePrefix = options?.questionTitle ?? "设计方案追问完善";
+	const loaderLabel = options?.loaderLabel ?? "🧠 AI 子代理正在分析代码并生成追问问题...";
 
 	// ── Step 1: Confirm entering grill mode ──────────────────
 	const enterGrill = await uiConfirm(ctx, confirmTitle, confirmDesc);
@@ -438,16 +438,16 @@ export async function runGrillPhase(
 
 		const choice = await uiSelect(
 			ctx,
-			"⚠️ AI 未能成功生成评审问题",
+			"⚠️ AI 未能成功生成追问问题",
 			[
-				"🔄 重新尝试生成评审问题",
+				"🔄 重新尝试生成追问问题",
 				"⏭️ 跳过 Grill，直接发送 Prompt",
 				"❌ 取消 (Esc)",
 			],
 		);
 
 		switch (choice) {
-			case "🔄 重新尝试生成评审问题": {
+			case "🔄 重新尝试生成追问问题": {
 				const retryPath = grillOutputPath(ctx.cwd);
 				const errorFeedback = parseErrorMsg
 					? [
@@ -513,13 +513,13 @@ export async function runGrillPhase(
 					rIdx++;
 				}
 				const qaBlock = pairs
-					.map((p, i) => `[评审问题 ${i + 1}]\n问题: ${p.question}\n回答: ${p.answer}`)
+					.map((p, i) => `[追问问题 ${i + 1}]\n问题: ${p.question}\n回答: ${p.answer}`)
 					.join("\n\n");
 				const finalEnhancedPrompt = [
 					assembledPrompt,
 					"",
 					"---",
-					"## 设计评审记录",
+					"## 设计追问记录",
 					"",
 					"以下是在开发前进行的设计评审问答，所有决策已确认：",
 					"",
@@ -572,16 +572,16 @@ export async function runGrillPhase(
 
 	// ── Step 6: Assemble enhanced prompt ─────────────────────
 	const qaBlock = pairs
-		.map((p, i) => `[评审问题 ${i + 1}]\n问题: ${p.question}\n回答: ${p.answer}`)
+		.map((p, i) => `[追问问题 ${i + 1}]\n问题: ${p.question}\n回答: ${p.answer}`)
 		.join("\n\n");
 
 	const finalEnhancedPrompt = [
 		assembledPrompt,
 		"",
 		"---",
-		"## 设计评审记录",
+		"## 方案追问记录",
 		"",
-		"以下是在开发前进行的设计评审问答，所有决策已确认：",
+		"以下是在开发前进行的追问式方案打磨记录，所有决策已确认：",
 		"",
 		qaBlock,
 	].join("\n");
@@ -615,7 +615,7 @@ async function showQuestionTUI(
 	q: GrillQuestion,
 	currentIndex: number,
 	totalCount: number,
-	titlePrefix = "设计方案评审",
+	titlePrefix = "设计方案追问完善",
 	backable = false,
 	previousAnswer?: string,
 ): Promise<string | null> {
@@ -707,8 +707,8 @@ async function showQuestionTUI(
 
 		container.addChild(new Spacer(1));
 		const hint = backable && currentIndex > 1
-			? "  ↑↓ 导航 • Enter 选择 • Ctrl+Shift+← 返回上一题 • Esc 取消全部评审"
-			: "  ↑↓ 导航 • Enter 选择 • Esc 取消全部评审";
+			? "  ↑↓ 导航 • Enter 选择 • Ctrl+Shift+← 返回上一题 • Esc 取消全部追问"
+			: "  ↑↓ 导航 • Enter 选择 • Esc 取消全部追问";
 		container.addChild(
 			new Text(theme.fg("dim", hint), 0, 0),
 		);

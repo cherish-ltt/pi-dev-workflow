@@ -1,6 +1,6 @@
 ---
 name: dev-prd-agent
-description: PRD 编写 agent — 根据对话上下文合成 PRD 文档
+description: PRD 编写 agent — 根据对话上下文合成 PRD 文档（追问阶段已由其他 grill agent 完成，本 agent 不追问）
 tools: read, bash
 thinking: high
 session: false
