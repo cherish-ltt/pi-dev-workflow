@@ -83,6 +83,16 @@ extra-args:
 * **具体改动内容**：
   1. 导出 `IProduct` 接口。
   2. 增加 `discountPrice` 可选属性。
+* **代码示例**：
+  ```typescript
+  // src/types/index.ts
+  export interface IProduct {
+    id: string;
+    name: string;
+    price: number;
+    discountPrice?: number; // 新增可选属性
+  }
+  ```typescript
 * **单步验证方式**：运行 `npx tsc --noEmit` 确保无类型报错。
 
 ### 步骤 2：[步骤名称，例如：实现核心业务逻辑]
@@ -91,6 +101,18 @@ extra-args:
 * **具体改动内容**：
   1. 引入 `IProduct`。
   2. 实现 `calculateFinalPrice` 函数，处理 `discountPrice` 逻辑。
+* **代码示例**：
+  ```typescript
+  // src/services/price.ts
+  import { IProduct } from '../types';
+
+  export function calculateFinalPrice(product: IProduct): number {
+    if (product.discountPrice !== undefined && product.discountPrice < product.price) {
+      return product.discountPrice;
+    }
+    return product.price;
+  }
+  ```typescript
 * **单步验证方式**：运行 `npm run test src/services/__tests__/price.test.ts`
 
 ---

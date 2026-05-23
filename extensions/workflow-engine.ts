@@ -470,6 +470,12 @@ function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): 
 			}
 		}
 
+		// Skip files in .pi-dev-output/ — these are workflow-generated artifacts (plans, reviews)
+		// and should NOT be reported as user repo changes. Real git clients (VSCode, Zed) also
+		// ignore this directory (it's in .gitignore). This filter is defense-in-depth.
+		// Note: git always uses forward slashes in paths, even on Windows.
+		if (change.path.startsWith(".pi-dev-output/")) continue;
+
 		seen.add(change.path);
 		const type: FileChangeEntry["type"] =
 			change.status === "A" ? "new" :
@@ -1100,12 +1106,14 @@ async function runAgentWithProgress(
 				_widgetExtraToolCount++;
 			}
 		}
-		// Detect output file paths — ONLY match explicit .pi-dev-output paths, never free-form text
-		const outputMatch = progress.match(/\.pi-dev-output\/[^\s,;)\]}]{5,}\.\w+/i);
-		if (outputMatch) {
-			const pathCandidate = outputMatch[0]!.trim();
-			if (pathCandidate.length > 15 && pathCandidate.length < 300) {
-				addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
+		// Detect output file paths — only match .pi-dev-output paths belonging to current workflow
+		if (_workflowId) {
+			const outputMatch = progress.match(/\.pi-dev-output\/[^\s,;)\]}]{5,}\.\w+/i);
+			if (outputMatch) {
+				const pathCandidate = outputMatch[0]!.trim();
+				if (pathCandidate.length > 15 && pathCandidate.length < 300 && pathCandidate.includes(_workflowId)) {
+					addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
+				}
 			}
 		}
 	}, _workflowId ? { workflowId: _workflowId } : undefined);
@@ -1122,127 +1130,47 @@ async function runAgentWithProgress(
 		toolCount: _widgetExtraToolCount,
 	});
 
-	// ── Post-completion: parse subagent output for tool calls and file paths ──
-	// Progress messages from spawnSubagent rarely contain tool info,
-	// so we scan the full output after completion.
+	// ── Post-completion: file change detection via git diff ONLY ──
+	// We do NOT parse agent output text for file paths — that approach is fragile and
+	// produces false positives (e.g., matching JS property names like `.push`, `.length`
+	// from code snippets). Instead, we rely entirely on git diff --name-status, which is
+	// the same approach used by VSCode, Zed, and every other professional git client.
+	// It's deterministic, noise-free, and always produces correct relative paths.
 	const allOutput = (result.output || "") + "\n" + (result.stderr || "");
 	const finalOutput = extractFinalOutput(result.output) || result.output;
 	const searchText = allOutput + "\n" + finalOutput;
 
-	// Detect file creation/modification patterns from agent's final output text
-	// The agent's response typically lists files using markdown backticks or bullet points
-	const filePatterns = [
-		// Markdown code blocks with file paths: `src/main.rs`, `path/to/file.ts`
-		/`([^`]+\.[a-zA-Z0-9_]+)`/g,
-		// Bullet points with file operation verbs: - Modify `src/main.rs`, * Created `file.ts`
-		/(?:^|\n)\s*[-*]\s*(?:modified|created|updated|edited|added|deleted|removed|changed|wrote|writes?)\s*[`"']?([^`"'\n,]+\.[a-zA-Z0-9_]+)[`"']?/gim,
-		// Descriptive: "I've modified src/main.rs", "reading config.json"
-		/(?:modified|created|updated|edited|added|deleted|removed|changed|wrote|write|writes|read|reads?)\s+(?:the\s+)?[`"']?([^`"'\n,]+\.[a-zA-Z0-9_]+)[`"']?/gi,
-		// Chinese patterns
-		/(?:编写|创建|修改|删除|读取|写入|更新)\s*(?:了|文件)?\s*[:：]?\s*[`"']?([^`"'\s,，]+\.[a-zA-Z0-9_]+)[`"']?/gi,
-		// File path with action prefix: "edit: src/file.ts", "new: src/file.ts"
-		/(?:^|\n)\s*(?:edit|new|delete|read|modify|create|update|add|remove)\s*[:：]\s*([^\n]+\.[a-zA-Z0-9_]+)/gim,
-	];
-	const seenTools = new Set<string>();
-	for (const pattern of filePatterns) {
+	// Find output file paths (plans, reviews) for display in the "output:" section
+	// These are workflow artifacts (.pi-dev-output/) — only show files belonging to
+	// the CURRENT workflow to avoid cross-contamination from previous runs.
+	// Note: file change detection itself relies exclusively on git diff below, not text parsing.
+	const seenOutputs = new Set<string>();
+	if (_workflowId) {
+		// Only match .pi-dev-output paths containing the current workflow UUID
+		const escapedId = _workflowId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		const outputPattern = new RegExp(`\\.pi-dev-output\\/[^\\s,;)\\]}]*${escapedId}[^\\s,;)\\]}]*`, 'g');
 		let m;
-		while ((m = pattern.exec(searchText)) !== null) {
-			const filePath = m[1]!.trim()
-				.replace(/[`'"\)\(\]]+$/, "")
-				.replace(/^[`'"\)\(\[]+/, "")
-				.split(/[\s,;]/)[0]!;
-			// Validate it's a real file path
-			if (filePath.length > 3 && filePath.length < 300 && !seenTools.has(filePath)) {
-				// Skip common non-file matches
-				if (filePath.match(/^(the|a|an|this|that|it|its|my|your|our|their|some|any|all|each|every|both|few|many|several|most|other|another|such|what|which|whose|whom|when|where|why|how|who|being|having|doing|making|taking|giving|getting|setting|using|running|going|coming|looking|finding|keeping|putting)/i)) continue;
-				if (filePath.startsWith("http")) continue;
-				if (filePath.length < 6 && !filePath.includes("/")) continue;
-
-				// 额外过滤器：排除明显不是文件路径的脏数据
-				if (filePath.includes("${") || filePath.includes("\\n") || filePath.includes("\\t")) continue;  // 排除模板字符串和转义字符
-				if (filePath.includes("[]") || filePath.includes("{}")) continue;  // 排除数组/对象字面量
-				if (filePath.match(/^[\s,;)\]}]+$/)) continue;  // 排除纯符号
-				seenTools.add(filePath);
-				const fullMatch = m[0]!.toLowerCase();
-				// Determine operation type and convert to git status
-				let toolType = "edit";
-				if (fullMatch.includes("write") || fullMatch.includes("创建") || fullMatch.includes("new") || fullMatch.includes("add") || fullMatch.includes("created") || fullMatch.includes("added")) {
-					toolType = "new";
-				} else if (fullMatch.includes("delete") || fullMatch.includes("删除") || fullMatch.includes("remove") || fullMatch.includes("deleted") || fullMatch.includes("removed")) {
-					toolType = "delete";
-				} else if (fullMatch.includes("read") || fullMatch.includes("读取")) {
-					toolType = "read";
-				}
-				if (toolType !== "read") {
-					const gitStatus = toGitStatus(toolType);
-					addWidgetSubStepTool(stepIndex, agentName, `${gitStatus}   ${filePath}`);
-					_widgetExtraToolCount++;
-				}
+		while ((m = outputPattern.exec(searchText)) !== null) {
+			const path_ = m[0]!.trim();
+			if (path_.length > 15 && path_.length < 300 && !seenOutputs.has(path_)) {
+				seenOutputs.add(path_);
+				addWidgetSubStepOutput(stepIndex, agentName, path_);
 			}
 		}
-	}
-
-	// If we found no file tools from text patterns, try alternative approaches
-	// Look for explicit tool call patterns in the raw JSON output
-	if (seenTools.size === 0) {
-		const jsonLines = (result.output || "").split("\n");
-		for (const line of jsonLines) {
-			try {
-				const event = JSON.parse(line);
-				// Look for tool_use events in the JSON stream
-				if (event.type === "message_update" && event.assistantMessageEvent?.type === "tool_use") {
-					const toolName = event.assistantMessageEvent.name;
-					const args = event.assistantMessageEvent.args || {};
-					// write tool: args contains file_path
-					if (toolName === "write" && args.file_path) {
-						const fp = args.file_path.trim();
-						if (!seenTools.has(fp)) {
-							seenTools.add(fp);
-							addWidgetSubStepTool(stepIndex, agentName, `A   ${fp}`);
-							_widgetExtraToolCount++;
-						}
-					}
-					// edit tool: args contains file_path
-					if (toolName === "edit" && args.file_path) {
-						const fp = args.file_path.trim();
-						if (!seenTools.has(fp)) {
-							seenTools.add(fp);
-							addWidgetSubStepTool(stepIndex, agentName, `M   ${fp}`);
-							_widgetExtraToolCount++;
-						}
-					}
-				}
-			} catch { /* not JSON, skip */ }
-		}
-	}
-
-	// Find output file paths (.pi-dev-output, review reports, plan files)
-	// NOTE: Only match explicit paths in .pi-dev-output/ or known review/plan file patterns.
-	// The old pattern matching loose "output:" text was the root cause of "output::0.00004508" noise.
-	// File change detection now relies on git diff --name-status (updateToolsFromGit below),
-	// which is deterministic and noise-free.
-	const outputPathPatterns = [
-		// Direct reference to .pi-dev-output paths: ".pi-dev-output/pi-plans/xxx.md"
-		/\.pi-dev-output\/[a-zA-Z0-9_\/-]+\.[a-zA-Z0-9]+/g,
-		// Review file patterns: "review-20260520-162800.md"
-		/review-\d{8}-\d{6}\.md/g,
-		// Plan file patterns: "20260520-1628-*.md"
-		/\d{8}-\d{4,6}-[a-zA-Z0-9_-]+\.md/g,
-	];
-	const seenOutputs = new Set<string>();
-	for (const pattern of outputPathPatterns) {
+	} else {
+		// No workflow ID (unlikely): match .pi-dev-output paths conservatively
+		const outputPattern = /\.pi-dev-output\/[a-zA-Z0-9_\/-]+\.[a-zA-Z0-9]+/g;
 		let m;
-		while ((m = pattern.exec(searchText)) !== null) {
+		while ((m = outputPattern.exec(searchText)) !== null) {
 			const path_ = m[0]!.trim();
-			if (path_.length > 10 && path_.length < 300 && !seenOutputs.has(path_)) {
+			if (path_.length > 15 && path_.length < 300 && !seenOutputs.has(path_)) {
 				seenOutputs.add(path_);
 				addWidgetSubStepOutput(stepIndex, agentName, path_);
 			}
 		}
 	}
 
-
-	// ── Update file changes from git diff (more accurate than text scraping) ──
+	// ── Update file changes from git diff (more accurate than text scraping) ──	
 	updateToolsFromGit(_workflowCwd, stepIndex, agentName);
 	// Update sub-step status based on result
 	const subStatus: WorkflowSubStepWidgetState["status"] =
