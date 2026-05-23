@@ -450,8 +450,8 @@ function captureBaseline(cwd: string): void {
  */
 function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): void {
 	const currentChanges = getGitDiffChanges(cwd);
-	const seen = new Set(_workflowFileChanges.map(c => c.filePath));
-
+	const seen = new Set(_workflowFileChanges.map(c => `${c.filePath}:${stepIndex}`));
+	
 	for (const change of currentChanges) {
 		if (seen.has(change.path)) continue;
 
@@ -883,47 +883,6 @@ function addWidgetSubStepTool(stepIndex: number, agentName: string, tool: string
 		if (!sub.tools) sub.tools = [];
 		sub.tools.push(tool);
 		if (sub.tools.length > 20) sub.tools = sub.tools.slice(-20); // keep last 20
-
-		// Also track as file change for checkpoint
-		// Support both old format ("edit: path") and new git-format ("M   path", "A   path", "D   path")
-		const oldMatch = tool.match(/^(edit|new|delete|read):\s*(.+)/i);
-		const gitMatch = !oldMatch ? tool.match(/^([MAD])\s{2,}(.+)$/) : null;
-		if (oldMatch) {
-			const changeType = oldMatch[1]!.toLowerCase() as FileChangeEntry["type"];
-			const filePath = oldMatch[2]!.trim();
-			const exists = _workflowFileChanges.some(
-				c => c.filePath === filePath && c.type === changeType && c.stepIndex === stepIndex && c.agent === agentName,
-			);
-			if (!exists && filePath.length > 3) {
-				_workflowFileChanges.push({
-					agent: agentName,
-					stepIndex,
-					type: changeType,
-					filePath,
-					timestamp: new Date().toISOString(),
-				});
-			}
-		} else if (gitMatch) {
-			const gitStatus = gitMatch[1]!;
-			const changeType: FileChangeEntry["type"] =
-				gitStatus === "A" ? "new" :
-				gitStatus === "D" ? "delete" :
-				"edit";
-			const filePath = gitMatch[2]!.trim();
-			const exists = _workflowFileChanges.some(
-				c => c.filePath === filePath && c.type === changeType && c.stepIndex === stepIndex && c.agent === agentName,
-			);
-			if (!exists && filePath.length > 3) {
-				_workflowFileChanges.push({
-					agent: agentName,
-					stepIndex,
-					type: changeType,
-					filePath,
-					timestamp: new Date().toISOString(),
-				});
-			}
-		}
-
 		refreshWidget();
 	}
 }
@@ -1350,41 +1309,14 @@ async function executeSingleStep(
 		throw new Error(`Agent 错误 (exit ${result.exitCode}): ${result.stderr.slice(0, 500)}`);
 	}
 
-	// ── Capture chain context for single-step agents ──
-	const agentChanges = _workflowFileChanges
-		.filter(c => c.stepIndex === stepIndex && c.agent === agentName)
-		.map(c => `${c.type === "new" ? "A" : c.type === "delete" ? "D" : "M"}   ${c.filePath}`);
-
-	let chainKey: string;
-	if (agentName === "planner") chainKey = "计划制定摘要";
-	else if (agentName === "docWriter") chainKey = "文档更新摘要";
-	else chainKey = `${agentName} 执行摘要`;
-
-	if (agentChanges.length > 0) {
-		const editCount = agentChanges.filter(c => c.startsWith("M")).length;
-		const newCount = agentChanges.filter(c => c.startsWith("A")).length;
-		const delCount = agentChanges.filter(c => c.startsWith("D")).length;
-		const statsParts: string[] = [];
-		if (editCount > 0) statsParts.push(`修改 ${editCount} 个`);
-		if (newCount > 0) statsParts.push(`新增 ${newCount} 个`);
-		if (delCount > 0) statsParts.push(`删除 ${delCount} 个`);
-		const statsLine = statsParts.length > 0 ? `改动统计: ${statsParts.join("，")}\n\n` : "";
-
-		updateChainContext(chainKey,
-			`${agentName} 已完成。\n` +
-			statsLine +
-			`变更文件列表:\n${agentChanges.join("\n")}`
-		);
-	} else {
-		updateChainContext(chainKey, `${agentName} 已完成执行，未检测到文件变更。`);
-	}
-
 	// ── Capture AI work summary as supplementary chain context ──
 	const workSummary = extractFinalOutput(result.output);
 	if (workSummary) {
-		updateChainContext(`${agentName} 工作总结`,
-			`${agentName} 已完成工作，以下是其工作总结：\n\n${workSummary}`
-		);
+		updateChainContext(`${agentName} 工作总结`, `${agentName} 已完成工作，以下是其工作总结：\n\n${workSummary}`);
+	} else if (result.output) {
+		// 保底：使用输出前 200 字符作为简略摘要
+		const fallback = result.output.slice(0, 200).trim();
+		if (fallback) updateChainContext(`${agentName} 工作总结`, fallback);
 	}
 }
 
@@ -1448,37 +1380,6 @@ async function executeLoopGroup(
             }
         }
 
-		// ── After loop agent completes: capture changes + stats for chain context ──
-		const loopAgentChanges = _workflowFileChanges
-			.filter(c => c.stepIndex === stepIndex && c.agent === step.loopAgentName)
-			.map(c => `${c.type === "new" ? "A" : c.type === "delete" ? "D" : "M"}   ${c.filePath}`);
-
-		// Use agent-specific keys so worker and trimmer changes coexist without overwriting
-		const chainKey = step.loopAgentName === "worker" ? "代码实施摘要" : "代码精简摘要";
-
-		if (loopAgentChanges.length > 0) {
-			const editCount = loopAgentChanges.filter(c => c.startsWith("M")).length;
-			const newCount = loopAgentChanges.filter(c => c.startsWith("A")).length;
-			const delCount = loopAgentChanges.filter(c => c.startsWith("D")).length;
-			const statsParts: string[] = [];
-			if (editCount > 0) statsParts.push(`修改 ${editCount} 个`);
-			if (newCount > 0) statsParts.push(`新增 ${newCount} 个`);
-			if (delCount > 0) statsParts.push(`删除 ${delCount} 个`);
-			const statsLine = statsParts.length > 0 ? `改动统计: ${statsParts.join("，")}\n\n` : "";
-
-			updateChainContext(chainKey,
-				`${step.loopAgentName === "worker" ? "代码实施" : "代码精简"}已完成。\n` +
-				statsLine +
-				`变更文件列表:\n${loopAgentChanges.join("\n")}` +
-				(planFileRelPath ? `\n\n实施计划: ${planFileRelPath}\n(可在 .pi-dev-output/pi-plans/ 中 grep UUID ${_workflowId} 找到)` : "")
-			);
-		} else {
-			updateChainContext(chainKey,
-				`${step.loopAgentName} 已完成执行，未检测到文件变更。\n` +
-				(planFileRelPath ? `实施计划: ${planFileRelPath}\n(可在 .pi-dev-output/pi-plans/ 中 grep UUID ${_workflowId} 找到)` : "")
-			);
-		}
-
 		// ── Capture loop agent work summary as supplementary chain context ──
 		const loopFinalText = extractFinalOutput(agentResult.output);
 		if (loopFinalText) {
@@ -1523,23 +1424,6 @@ async function executeLoopGroup(
 			if (reviewContent) {
 				reviewSummary = parseReviewerOutput(reviewContent) ?? extractSeverityFromText(reviewContent);
 			}
-		}
-
-		// ── After reviewer: capture review context for next loop ──
-		// Use agent-specific key so worker-reviewer and trimmer-reviewer feedback don't interfere
-		const reviewChainKey = step.loopAgentName === "worker" ? "代码审查反馈" : "精简审查反馈";
-		if (reviewSummary) {
-			const reviewCountParts: string[] = [];
-			if (reviewSummary.critical > 0) reviewCountParts.push(`严重 ${reviewSummary.critical} 个`);
-			if (reviewSummary.medium > 0) reviewCountParts.push(`中等 ${reviewSummary.medium} 个`);
-			if (reviewSummary.low > 0) reviewCountParts.push(`低 ${reviewSummary.low} 个`);
-			const reviewStats = reviewCountParts.length > 0 ? `发现 ${reviewCountParts.join("，")} 问题。` : "未发现问题。";
-
-			updateChainContext(reviewChainKey,
-				`${reviewStats}\n` +
-				`完整审查报告在 .pi-dev-output/pi-review/md/ 目录中，\n` +
-				`请在工作流输出目录中 grep UUID "${_workflowId}" 查找最新报告。`
-			);
 		}
 
 		// ── Capture reviewer work summary as supplementary chain context ──
