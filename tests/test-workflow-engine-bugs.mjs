@@ -495,17 +495,19 @@ assert(singleStepFuncStart !== -1, "找到 executeSingleStep 函数");
 const singleStepEndSearch = source.indexOf("async function executeLoopGroup", singleStepFuncStart);
 const fullSingleStep = source.slice(singleStepFuncStart, singleStepEndSearch);
 
-const hasChainContextKey = fullSingleStep.includes('chainKey');
-assertTrue(hasChainContextKey, "executeSingleStep 中有 chainKey 变量");
+// Verify 工作总结 entries still exist (preserved - from extractFinalOutput)
+const hasWorkSummaryKey = fullSingleStep.includes('工作总结');
+assertTrue(hasWorkSummaryKey, "executeSingleStep 中保留 '工作总结' 条目");
 
-const hasUpdateChainContext = fullSingleStep.includes('updateChainContext(chainKey');
-assertTrue(hasUpdateChainContext, "executeSingleStep 中调用 updateChainContext");
+const hasWorkSummaryUpdate = fullSingleStep.includes('updateChainContext');
+assertTrue(hasWorkSummaryUpdate, "executeSingleStep 中仍有 updateChainContext 调用（工作总结）");
 
-const hasPlannerKey = fullSingleStep.includes('"计划制定摘要"');
-assertTrue(hasPlannerKey, "agentName === planner 时使用 '计划制定摘要' key");
+// Verify the removed summary keys are no longer present
+const hasPlannerKeyRemoved = !fullSingleStep.includes('"计划制定摘要"');
+assertTrue(hasPlannerKeyRemoved, "executeSingleStep 中已移除 '计划制定摘要' key");
 
-const hasDocWriterKey = fullSingleStep.includes('"文档更新摘要"');
-assertTrue(hasDocWriterKey, "agentName === docWriter 时使用 '文档更新摘要' key");
+const hasDocWriterKeyRemoved = !fullSingleStep.includes('"文档更新摘要"');
+assertTrue(hasDocWriterKeyRemoved, "executeSingleStep 中已移除 '文档更新摘要' key");
 
 
 console.log("\n═══ Bug H 测试 — Agent 前置元数据解析 ═══\n");
@@ -648,11 +650,123 @@ const reviewHasWorkflowId = reviewTaskParams.includes("workflowId");
 assertTrue(reviewHasWorkflowId, "buildReviewTask 接收 workflowId 参数");
 
 
+console.log("\n");
+
+console.log("═══ Bug J 测试 — _workflowFileChanges 仅来自 git diff ═══\n");
+
+// ── Test J1: _workflowFileChanges.push 仅出现在 updateToolsFromGit ──
+console.log("📋 测试 J1: _workflowFileChanges.push 仅出现在 updateToolsFromGit\n");
+
+// Count all _workflowFileChanges.push occurrences
+const pushMatches = [...source.matchAll(/_workflowFileChanges\.push\(/g)];
+assertEq(pushMatches.length, 1, "_workflowFileChanges.push 仅出现 1 次");
+
+// Verify the single push is inside updateToolsFromGit by checking
+// the function body of updateToolsFromGit contains the push.
+const updateToolsStart = source.indexOf("function updateToolsFromGit");
+const nextFuncStart = source.indexOf("function saveCheckpoint", updateToolsStart);
+const updateToolsBody = source.slice(updateToolsStart, nextFuncStart);
+const pushInUpdateTools = updateToolsBody.includes("_workflowFileChanges.push");
+assertTrue(pushInUpdateTools, "updateToolsFromGit 函数体内包含 _workflowFileChanges.push");
+
+// ── Test J2: addWidgetSubStepTool 不再污染 _workflowFileChanges ──
+console.log("\n📋 测试 J2: addWidgetSubStepTool 不再污染 _workflowFileChanges\n");
+
+const addWidgetFunc = source.slice(
+	source.indexOf("function addWidgetSubStepTool"),
+	source.indexOf("function addWidgetSubStepOutput")
+);
+const hasNoFileChangesRef = !addWidgetFunc.includes("_workflowFileChanges");
+assertTrue(hasNoFileChangesRef, "addWidgetSubStepTool 中不再引用 _workflowFileChanges");
+
+// ── Test J3: executeSingleStep 中不再有基于 _workflowFileChanges 的统计 ──
+console.log("\n📋 测试 J3: executeSingleStep 中不再有 '执行摘要' 类 chain context\n");
+
+const hasNoExecutorSummary = !fullSingleStep.includes('执行摘要');
+assertTrue(hasNoExecutorSummary, "executeSingleStep 中不再有 '执行摘要' chain context");
+
+// ── Test J4: executeLoopGroup 中不再有 "代码实施/精简摘要" chain context ──
+console.log("\n📋 测试 J4: executeLoopGroup 中不再有 '代码实施/精简摘要' chain context\n");
+
+const loopGroupStart = source.indexOf("async function executeLoopGroup");
+assert(loopGroupStart !== -1, "找到 executeLoopGroup 函数");
+const loopGroupBody = source.slice(loopGroupStart);
+const hasNoCodeImplSummary = !loopGroupBody.includes('"代码实施摘要"') && !loopGroupBody.includes('"代码精简摘要"');
+assertTrue(hasNoCodeImplSummary, "executeLoopGroup 中不再有 '代码实施摘要' 或 '代码精简摘要' chain context");
+
+const hasNoReviewFeedbackKey = !loopGroupBody.includes('"代码审查反馈"') && !loopGroupBody.includes('"精简审查反馈"');
+assertTrue(hasNoReviewFeedbackKey, "executeLoopGroup 中不再有 '代码审查反馈' 或 '精简审查反馈' chain context");
+
+// ── Test J5: 工作总结条目在所有 agent 函数中仍保留 ──
+console.log("\n📋 测试 J5: '工作总结' 条目在所有 agent 函数中仍保留\n");
+
+const hasWorkSummaryInSingleStep = fullSingleStep.includes('工作总结');
+assertTrue(hasWorkSummaryInSingleStep, "executeSingleStep 保留 '工作总结' 条目");
+
+const hasWorkSummaryInLoop = loopGroupBody.includes('工作总结');
+assertTrue(hasWorkSummaryInLoop, "executeLoopGroup 保留 '工作总结' 条目");
+
+
 console.log("\n=== 增强功能测试汇总 ===\n");
 console.log("📋 附加测试覆盖:");
-console.log("  - G: 链上下文传递 (executeSingleStep)");
+console.log("  - G: 链上下文传递 (executeSingleStep) — 已更新验证工作总结");
 console.log("  - H: Agent 前置元数据解析 + MCP/SKILL 移除");
 console.log("  - I: 工作流 UUID 溯源机制");
+console.log("  - J: _workflowFileChanges 仅来自 git diff");
+console.log("\n═══ Bug K 测试 — git diff 精准识别 + .pi-dev-output 过滤 ═══\n");
+
+// ── Test K1: filePatterns 已移除 — 不再用 regex 猜文件路径 ──
+console.log("📋 测试 K1: filePatterns 已移除\n");
+
+const hasFilePatterns = source.includes("const filePatterns = [");
+assertFalse(hasFilePatterns, "filePatterns 数组已移除（不再用 regex 嗅探文件路径）");
+
+// ── Test K2: seenTools 文本解析 fallback 已移除 ──
+console.log("\n📋 测试 K2: seenTools JSON fallback 已移除\n");
+
+const hasJsonFallback = source.includes("if (seenTools.size === 0)");
+assertFalse(hasJsonFallback, "seenTools JSON tool_use fallback 已移除");
+
+// ── Test K3: outputPathPatterns 统一 inline 模式已移除 ──
+console.log("\n📋 测试 K3: outputPathPatterns 已简化\n");
+
+const hasOutputPathPatterns = source.includes("const outputPathPatterns = [");
+assertFalse(hasOutputPathPatterns, "outputPathPatterns 数组已移除（替换为 inline workflowId 过滤）");
+
+// ── Test K4: updateToolsFromGit 有 .pi-dev-output/ 过滤 ──
+console.log("\n📋 测试 K4: updateToolsFromGit 过滤 .pi-dev-output/\n");
+
+const hasDotPiDevFilter = source.includes('change.path.startsWith(".pi-dev-output/")');
+assertTrue(hasDotPiDevFilter, "updateToolsFromGit 跳过 .pi-dev-output/ 路径");
+
+// ── Test K5: output 路径匹配使用 escapedId + workflowId ──
+console.log("\n📋 测试 K5: output 路径使用 workflowId 过滤\n");
+
+const hasEscapedId = source.includes("const escapedId = _workflowId.replace(");
+assertTrue(hasEscapedId, "output 路径匹配使用 escapedId");
+
+// ── Test K6: progress handler output match 使用 _workflowId ──
+console.log("\n📋 测试 K6: progress handler 使用 workflowId\n");
+
+const hasIncludesWorkflowId = source.includes("pathCandidate.includes(_workflowId)");
+assertTrue(hasIncludesWorkflowId, "progress handler 使用 pathCandidate.includes(_workflowId)");
+
+// ── Test K7: addWidgetSubStepTool 只来自 git diff + progress handler ──
+console.log("\n📋 测试 K7: addWidgetSubStepTool 只来自必要来源\n");
+
+// Verify the two known call sites exist:
+// 1. updateToolsFromGit: calls addWidgetSubStepTool with git status + path
+// 2. runAgentWithProgress progress handler: calls addWidgetSubStepTool with parsed toolMatch
+// Both are runtime call sites (not the function definition itself).
+assertTrue(source.includes("addWidgetSubStepTool(stepIndex, agentName, `${change.status}   ${change.path}`)"), "updateToolsFromGit 调用 addWidgetSubStepTool");
+assertTrue(source.includes("addWidgetSubStepTool(stepIndex, agentName, `${gitStatus}   ${target}`)"), "progress handler 调用 addWidgetSubStepTool");
+
+// ── Test K8: addWidgetSubStepOutput 仍存在 (output 路径展示有用) ──
+console.log("\n📋 测试 K8: addWidgetSubStepOutput 仍保留\n");
+
+const hasAddWidgetOutput = source.includes("function addWidgetSubStepOutput");
+assertTrue(hasAddWidgetOutput, "addWidgetSubStepOutput 函数声明仍保留");
+
 
 
 console.log("\n═══════════════════════════════════════════════════════\n");

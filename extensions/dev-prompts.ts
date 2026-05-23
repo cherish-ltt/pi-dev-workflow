@@ -399,7 +399,7 @@ const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		label: "📝 更新文档",
 		type: "confirm",
 		agentName: "docWriter",
-		timeoutMs: 300_000,
+		timeoutMs: 600_000,
 	},
 ];
 
@@ -426,7 +426,7 @@ const FIX_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		label: "📝 更新文档",
 		type: "confirm",
 		agentName: "docWriter",
-		timeoutMs: 300_000,
+		timeoutMs: 600_000,
 	},
 ];
 
@@ -513,7 +513,7 @@ const DOC_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		label: "📝 撰写文档",
 		type: "auto",
 		agentName: "docWriter",
-		timeoutMs: 300_000,
+		timeoutMs: 600_000,
 	},
 ];
 
@@ -536,7 +536,7 @@ const SECURITY_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		label: "🔒 安全审查",
 		type: "auto",
 		agentName: "reviewer",
-		timeoutMs: 300_000,
+		timeoutMs: 900_000,
 	},
 ];
 
@@ -857,7 +857,7 @@ const COMPARE_QUESTIONS = [
 export default function (pi: ExtensionAPI) {
 	// ── /dev-feat ──────────────────────────────────────────────
 	pi.registerCommand("dev-feat", {
-		description: "(prompt wizard) 新功能/创意生成 — 支持设计评审 (Grill) + 自动化工作流",
+		description: "(prompt wizard) 新功能/创意生成 — 支持设计方案追问完善 (Grill) + 自动化工作流",
 		handler: async (_args, ctx) => {
 			const answers: Record<string, string> = {};
 			let featIdx = 0;
@@ -911,17 +911,17 @@ export default function (pi: ExtensionAPI) {
 
 	// ── /dev-fix ───────────────────────────────────────────────
 	pi.registerCommand("dev-fix", {
-		description: "(prompt wizard) 问题排查/错误修正 — 支持根因分析评审 (Grill)",
+		description: "(prompt wizard) 问题排查/错误修正 — 支持 Bug 根因追问 (Grill)",
 		handler: async (_args, ctx) => {
 			await runWizardWithGrill(
 				ctx, pi, "fix", "问题排查/错误修正",
 				FIX_QUESTIONS, assembleFixPrompt,
 				{
 					agentDef: _fixGrillAgent,
-					title: "🐛 Bug 根因分析评审",
-					description: "AI 会从复现条件、根因推理、修复方案、回归风险等维度挑战你的理解。",
+					title: "🐛 Bug 根因追问",
+					description: "AI 会通过一步步追问帮你精准定位根因：从复现条件到根本原因推理，再到修复方案验证和回归风险评估。",
 					questionTitle: "Bug 根因分析",
-					loaderLabel: "🧠 AI 正在分析代码并生成根因评审问题...",
+					loaderLabel: "🧠 AI 正在分析代码并生成根因追问问题...",
 				},
 				{ steps: FIX_WORKFLOW_STEPS },
 			);
@@ -930,17 +930,17 @@ export default function (pi: ExtensionAPI) {
 
 	// ── /dev-doc ───────────────────────────────────────────────
 	pi.registerCommand("dev-doc", {
-		description: "(prompt wizard) 文档生成/总结 — 支持大纲评审 (Grill)",
+		description: "(prompt wizard) 文档生成/总结 — 支持文档大纲追问完善 (Grill)",
 		handler: async (_args, ctx) => {
 			await runWizardWithGrill(
 				ctx, pi, "doc", "文档生成/总结",
 				DOC_QUESTIONS, assembleDocPrompt,
 				{
 					agentDef: _docGrillAgent,
-					title: "📄 文档大纲评审",
-					description: "AI 会从受众定位、结构安排、示例选择等维度审视你的文档计划。",
-					questionTitle: "文档大纲评审",
-					loaderLabel: "🧠 AI 正在分析并生成文档大纲评审问题...",
+					title: "📄 文档大纲追问完善",
+					description: "AI 会通过追问帮你完善文档大纲：从受众定位到结构安排，确认术语一致性和示例覆盖范围。",
+					questionTitle: "文档大纲追问完善",
+					loaderLabel: "🧠 AI 正在分析并生成文档大纲追问问题...",
 				},
 				{ steps: DOC_WORKFLOW_STEPS },
 			);
@@ -949,17 +949,17 @@ export default function (pi: ExtensionAPI) {
 
 	// ── /dev-refactor ──────────────────────────────────────────
 	pi.registerCommand("dev-refactor", {
-		description: "(prompt wizard) 重构/优化现有结构 — 支持重构计划评审 (Grill)",
+		description: "(prompt wizard) 重构/优化现有结构 — 支持重构方案追问 (Grill)",
 		handler: async (_args, ctx) => {
 			await runWizardWithGrill(
 				ctx, pi, "refactor", "重构/优化",
 				REFACTOR_QUESTIONS, assembleRefactorPrompt,
 				{
 					agentDef: _refactorGrillAgent,
-					title: "🔧 重构方案评审",
-					description: "AI 会从模块边界、API 兼容性、测试策略、迁移风险等维度审视你的重构计划。",
-					questionTitle: "重构方案评审",
-					loaderLabel: "🧠 AI 正在分析代码并生成重构评审问题...",
+					title: "🔧 重构方案追问",
+					description: "AI 会通过追问帮你识别隐藏耦合风险：从模块边界到 API 兼容性，验证行为保持和迁移路径安全性。",
+					questionTitle: "重构方案追问",
+					loaderLabel: "🧠 AI 正在分析代码并生成重构追问问题...",
 				},
 				{ steps: REFACTOR_WORKFLOW_STEPS },
 			);
@@ -968,17 +968,17 @@ export default function (pi: ExtensionAPI) {
 
 	// ── /dev-test ──────────────────────────────────────────────
 	pi.registerCommand("dev-test", {
-		description: "(prompt wizard) 测试用例生成 — 支持测试计划评审 (Grill)",
+		description: "(prompt wizard) 测试用例生成 — 支持测试策略追问 (Grill)",
 		handler: async (_args, ctx) => {
 			await runWizardWithGrill(
 				ctx, pi, "test", "测试用例/评估",
 				TEST_QUESTIONS, assembleTestPrompt,
 				{
 					agentDef: _testGrillAgent,
-					title: "🧪 测试计划评审",
-					description: "AI 会从覆盖维度、边界条件、模拟策略等角度审视你的测试方案。",
-					questionTitle: "测试计划评审",
-					loaderLabel: "🧠 AI 正在分析并生成测试评审问题...",
+					title: "🧪 测试策略追问",
+					description: "AI 会通过追问帮你发现测试缺口：从覆盖维度到边界条件，验证模拟策略和测试隔离是否到位。",
+					questionTitle: "测试策略追问",
+					loaderLabel: "🧠 AI 正在分析并生成测试追问问题...",
 				},
 				{ steps: TEST_WORKFLOW_STEPS },
 			);
@@ -995,17 +995,17 @@ export default function (pi: ExtensionAPI) {
 
 	// ── /dev-perf ──────────────────────────────────────────────
 	pi.registerCommand("dev-perf", {
-		description: "(prompt wizard) 性能优化 — 支持优化方案评审 (Grill)",
+		description: "(prompt wizard) 性能优化 — 支持性能优化方案追问 (Grill)",
 		handler: async (_args, ctx) => {
 			await runWizardWithGrill(
 				ctx, pi, "perf", "性能优化",
 				PERF_QUESTIONS, assemblePerfPrompt,
 				{
 					agentDef: _perfGrillAgent,
-					title: "⚡ 性能优化方案评审",
-					description: "AI 会从基准测试方法、优化方向、回归风险等维度审视你的方案。",
-					questionTitle: "性能优化方案评审",
-					loaderLabel: "🧠 AI 正在分析并生成性能优化评审问题...",
+					title: "⚡ 性能优化方案追问",
+					description: "AI 会通过追问帮你验证瓶颈判断和优化方向：从基准测试方法到潜在回归风险，确保方案合理性。",
+					questionTitle: "性能优化方案追问",
+					loaderLabel: "🧠 AI 正在分析并生成性能优化追问问题...",
 				},
 				{ steps: PERF_WORKFLOW_STEPS },
 			);
