@@ -399,7 +399,7 @@ const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		label: "📝 更新文档",
 		type: "confirm",
 		agentName: "docWriter",
-		timeoutMs: 300_000,
+		timeoutMs: 600_000,
 	},
 ];
 
@@ -426,7 +426,7 @@ const FIX_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		label: "📝 更新文档",
 		type: "confirm",
 		agentName: "docWriter",
-		timeoutMs: 300_000,
+		timeoutMs: 600_000,
 	},
 ];
 
@@ -513,7 +513,7 @@ const DOC_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		label: "📝 撰写文档",
 		type: "auto",
 		agentName: "docWriter",
-		timeoutMs: 300_000,
+		timeoutMs: 600_000,
 	},
 ];
 
@@ -536,7 +536,7 @@ const SECURITY_WORKFLOW_STEPS: WorkflowStepDef[] = [
 		label: "🔒 安全审查",
 		type: "auto",
 		agentName: "reviewer",
-		timeoutMs: 300_000,
+		timeoutMs: 900_000,
 	},
 ];
 
