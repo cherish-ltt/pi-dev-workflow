@@ -26,13 +26,13 @@ pi-package/
 ├── agents/
 │   ├── git-agent.md                 # git-sub-agent 定义（专注 git 操作）
 │   ├── review-agent.md              # review-sub-agent 定义（专注代码审查）
-│   ├── grill/                       # 设计评审 (Grill) agent 定义
+│   ├── grill/                       # 方案追问完善 (Grill) agent 定义
 │   │   ├── dev-grill-agent.md       #   通用 /dev-feat Grill agent
-│   │   ├── dev-fix-grill-agent.md   #   /dev-fix 根因分析评审
-│   │   ├── dev-doc-grill-agent.md   #   /dev-doc 文档大纲评审
-│   │   ├── dev-refactor-grill-agent.md
-│   │   ├── dev-test-grill-agent.md
-│   │   ├── dev-perf-grill-agent.md
+│   │   ├── dev-fix-grill-agent.md   #   /dev-fix Bug 根因追问
+│   │   ├── dev-doc-grill-agent.md   #   /dev-doc 文档大纲追问完善
+│   │   ├── dev-refactor-grill-agent.md   #   /dev-refactor 重构追问完善
+│   │   ├── dev-test-grill-agent.md   #   /dev-test 测试追问完善
+│   │   ├── dev-perf-grill-agent.md   #   /dev-perf 优化追问完善
 │   │   └── dev-prd-agent.md         #   PRD 生成 agent
 │   └── workflow/                    # 自动化工作流 agent 定义
 │       ├── planner-agent.md         #   计划制定 agent
@@ -46,7 +46,7 @@ pi-package/
 │   └── review-diff.md              # 审查 diff 的提示模板
 ├── skills/
 │   ├── grill-with-docs/
-│   │   └── SKILL.md                 # 设计评审：挑战方案、统一术语、更新文档
+│   │   └── SKILL.md                 # 方案追问完善：挑战方案、统一术语、更新文档
 │   ├── karpathy-guidelines/
 │   │   └── SKILL.md                 # Karpathy 编码准则（避免 LLM 常见错误）
 │   ├── review-html/
@@ -56,7 +56,7 @@ pi-package/
 ├── extensions/
 │   ├── dev-prompts.ts               # 提示词优化向导（/dev-* 命令）
 │   ├── git-commands.ts              # git-sub-agent 命令
-│   ├── grill-me-agent.ts            # Grill + PRD 运行时：设计评审、PRD 生成
+│   ├── grill-me-agent.ts            # Grill + PRD 运行时：方案追问完善、PRD 生成
 │   ├── sub-agents.ts                # 子代理系统：git-sub-agent + review-sub-agent
 │   ├── workflow-engine.ts           # 工作流编排引擎（由 dev-prompts.ts 引入）
 │   └── ui-helpers.ts                # TUI 组件构建器（Select/Confirm/Input/Widget）
@@ -189,8 +189,8 @@ Bug 描述？ 创建用户成功后返回 201，但实际上返回了 500
 核心功能描述？ 用户可以通过信用卡或 PayPal 进行一次性支付
 
 → 填写完成后，弹出确认框：
-🔍 设计方案评审 — 是否进入设计评审 (Grill) 模式？
-→ 逐题回答完毕（约 15-25 题），评审记录附加到提示词末尾。
+🔍 设计方案追问完善 — 是否进入方案追问完善 (Grill) 模式？
+→ 逐题回答完毕（约 15-25 题），追问记录附加到提示词末尾。
 
 → 弹出工作流确认框：
 🚀 进入自动化工作流？
@@ -227,13 +227,15 @@ Bug 描述？ 创建用户成功后返回 201，但实际上返回了 500
 
 工作流由 `extensions/workflow-engine.ts` 编排，在 `extensions/dev-prompts.ts` 中定义各命令的步骤链。每个步骤启动一个独立的 sub-agent 进程，拥有隔离的上下文窗口。
 
+**文件变更检测**：工作流引擎完全依赖 `git diff --name-status` 检测文件变更，与 VSCode、Zed 等专业 git 客户端的检测方式一致，无 AI 文本解析带来的假阳性噪声。
+
 ### Workflow Agent 一览
 
 5 个专用 sub-agent 各司其职，定义在 `agents/workflow/` 目录下：
 
 | Agent | 职责 | 定义文件 |
 |-------|------|---------|
-| **planner** | 分析代码库，生成详细的实施计划并写入 `.pi-dev-output/pi-plans/` | `agents/workflow/planner-agent.md` |
+| **planner** | 分析代码库，生成详细的实施计划（含可直接运行的代码示例模板）并写入 `.pi-dev-output/pi-plans/` | `agents/workflow/planner-agent.md` |
 | **worker** | 按计划逐步实现代码改动（严格遵循计划，不做计划外修改） | `agents/workflow/worker-agent.md` |
 | **reviewer** | 审查代码质量，输出带严重等级的结构化报告（critical/medium/low） | `agents/workflow/reviewer-agent.md` |
 | **trimmer** | 精简冗余代码、缩短冗长行、消除重复逻辑，优化可读性 | `agents/workflow/trimmer-agent.md` |
@@ -302,7 +304,7 @@ Bug 描述？ 创建用户成功后返回 201，但实际上返回了 500
 
 ### 超时处理
 
-每个步骤有独立的超时时间（`timeoutMs` 字段）。超时后的行为因模式而异：
+每个步骤有独立的超时时间（`timeoutMs` 字段）。默认超时：worker/trimmer/planner 为 5 分钟，docWriter 为 10 分钟（600,000ms），security 审查步骤为 15 分钟（900,000ms）。超时后的行为因模式而异：
 
 | 模式 | 超时行为 |
 |------|---------|
@@ -316,16 +318,16 @@ Bug 描述？ 创建用户成功后返回 201，但实际上返回了 500
 |---|---|---|
 | **karpathy-guidelines** | [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/andrej-karpathy-skills) | 基于 Andrej Karpathy 对 LLM 编码陷阱的观察，强调简洁、精准、可验证 |
 | **review-html** | 自制 | git diff / commit 审查，输出自包含的交互式 HTML 报告 |
-| **grill-with-docs** | [mattpocock/skills](https://github.com/mattpocock/skills) | 设计评审 — 挑战方案、统一术语、实时更新 CONTEXT.md 和 ADR |
+| **grill-with-docs** | [mattpocock/skills](https://github.com/mattpocock/skills) | 方案追问完善 — 挑战方案、统一术语、实时更新 CONTEXT.md 和 ADR |
 | **to-prd** | [mattpocock/skills](https://github.com/mattpocock/skills) | 从对话上下文和代码库理解生成 PRD，保存到 `.pi-dev-output/pi-prd/` |
 
-## 设计评审（Grill）机制
+## 方案追问完善（Grill）机制
 
-Grill（"拷问式评审"）是提交方案前由 AI sub-agent 从多个维度挑战你设计的交互流程。Grill 阶段在 `/dev-*` 向导完成后自动触发，以确认对话框询问是否进入评审。
+Grill（"追问式打磨"）是提交方案前由 AI sub-agent 从多个维度追问完善你的设计的交互流程。Grill 阶段在 `/dev-*` 向导完成后自动触发，以确认对话框询问是否进入追问完善。
 
-评审流程：
-1. **确认** — 弹出对话框，选择"是"进入评审
-2. **生成问题** — sub-agent 根据方案上下文，一次生成全部评审问题（JSON 数组）
+追问完善流程：
+1. **确认** — 弹出对话框，选择"是"进入追问完善
+2. **生成问题** — sub-agent 根据方案上下文，一次生成全部追问问题（JSON 数组）
 3. **逐题回答** — TUI 逐题展示，每道题带选项列表 + 自定义输入入口
 4. **增强提示词** — 所有 Q&A 追加到原提示词末尾，形成 `enhancedPrompt`
 
@@ -333,14 +335,14 @@ Grill（"拷问式评审"）是提交方案前由 AI sub-agent 从多个维度�
 
 不同的 `/dev-*` 命令使用专门定制的 grill agent，问题方向与任务类型对齐：
 
-| 命令 | Grill 场景 | 评审维度 |
+| 命令 | Grill 场景 | 追问维度 |
 |---|---|---|
-| `/dev-feat` | 设计方案评审 | 架构、数据流、模块边界、安全、测试策略、性能、可扩展性 |
-| `/dev-fix` | Bug 根因分析评审 | 复现条件、根因推理、修复方案、回归风险 |
-| `/dev-doc` | 文档大纲评审 | 受众定位、结构安排、示例选择 |
-| `/dev-refactor` | 重构方案评审 | 模块边界、API 兼容性、测试策略、迁移风险 |
-| `/dev-test` | 测试计划评审 | 覆盖维度、边界条件、模拟策略 |
-| `/dev-perf` | 性能优化评审 | 基准测试方法、优化方向、回归风险 |
+| `/dev-feat` | 设计方案追问完善 | 架构、数据流、模块边界、安全、测试策略、性能、可扩展性 |
+| `/dev-fix` | Bug 根因追问 | 复现条件、根因推理、修复方案、回归风险 |
+| `/dev-doc` | 文档大纲追问完善 | 受众定位、结构安排、示例选择 |
+| `/dev-refactor` | 重构方案追问 | 模块边界、API 兼容性、测试策略、迁移风险 |
+| `/dev-test` | 测试策略追问 | 覆盖维度、边界条件、模拟策略 |
+| `/dev-perf` | 性能优化方案追问 | 基准测试方法、优化方向、回归风险 |
 
 ### 交互形式
 
@@ -350,7 +352,7 @@ Grill（"拷问式评审"）是提交方案前由 AI sub-agent 从多个维度�
 - 导航：↑↓ 选择，Enter 确认
 - 返回：`Ctrl+Shift+←` 返回上一题（输入框中也可用 `Ctrl+Shift+←` 返回上一步）
 - 跳过：`Ctrl+Shift+→` 在输入框中跳过当前输入并继续
-- 取消：Esc 取消全部评审
+- 取消：Esc 取消全部追问
 - 进度：标题栏显示 `问题 3/18`
 
 ### 输入框特性
@@ -407,7 +409,7 @@ pi install git:github.com/cherish-ltt/pi-dev-workflow
 ## 常见问题
 
 **Q: Grill 阶段可以跳过吗？**
-A: 可以。在 Grill 确认对话框中选择"否"即可跳过，原提示词不变直接投递给主代理。评审过程中按 Esc 也可随时取消，已回答的问题仍会附加到提示词中。
+A: 可以。在 Grill 确认对话框中选择"否"即可跳过，原提示词不变直接投递给主代理。追问过程中按 Esc 也可随时取消，已回答的问题仍会附加到提示词中。
 
 **Q: 所有 `/dev-*` 命令都支持 Grill 吗？**
 A: 不是。以下命令支持 Grill：`/dev-feat`、`/dev-fix`、`/dev-doc`、`/dev-refactor`、`/dev-test`、`/dev-perf`。`/dev-chore`、`/dev-style`、`/dev-security`、`/dev-explain`、`/dev-compare` 不包含 Grill 阶段。
@@ -418,8 +420,8 @@ A: 只有 `/dev-feat` 会在执行完成后触发 PRD 生成。其他命令不�
 **Q: 如何自定义 Grill 的问题数量和方向？**
 A: 在 `extensions/grill-me-agent.ts` 中修改对应 AgentDef 的 `systemPrompt` 即可控制问题方向和数量。目前各领域 grill agent 的问题数量由 LLM 自主决定（典型 15-40 题）。
 
-**Q: 评审结果是否影响原提示词？**
-A: 评审问答以「设计评审记录」区块追加到原提示词末尾，原提示词内容不变。主代理执行时会同时参考原需求 + 评审中确认的决策。
+**Q: 追问问答是否影响原提示词？**
+A: 追问问答以「方案追问记录」区块追加到原提示词末尾，原提示词内容不变。主代理执行时会同时参考原需求 + 追问中确认的决策。
 
 **Q: Grill 中如何返回上一题？**
 A: 使用 `Ctrl+Shift+←` 返回上一题（在选项列表和自定义输入框中均适用）。裸 `←` 键在选项列表中无效果，在输入框中用于光标左移编辑文本。
@@ -428,7 +430,7 @@ A: 使用 `Ctrl+Shift+←` 返回上一题（在选项列表和自定义输入�
 A: `Enter` 确认提交，`Esc` 取消返回选项列表，`Ctrl+Shift+←` 返回上一题，`Ctrl+Shift+→` 跳过输入并继续，方向键 `←`/`→` 用于移动光标编辑已有文本。
 
 **Q: `grill-with-docs` skill 和 `/dev-*` 内置的 Grill 有什么区别？**
-A: `grill-with-docs` 是可独立调用的 skill（`/skill:grill-with-docs`），侧重领域术语统一和文档同步（更新 CONTEXT.md、创建 ADR）。`/dev-*` 内置的 Grill 是任务向导的一部分，侧重方案评审，不涉及文档持久化。
+A: `grill-with-docs` 是可独立调用的 skill（`/skill:grill-with-docs`），侧重领域术语统一和文档同步（更新 CONTEXT.md、创建 ADR）。`/dev-*` 内置的 Grill 是任务向导的一部分，侧重方案追问完善，不涉及文档持久化。
 
 **Q: 工作流执行到一半中断了怎么办？**
 A: 工作流引擎会在每次步骤完成后保存 checkpoint 到 `.pi-dev-output/pi-workflow/checkpoint.json`。重新执行对应的 `/dev-*` 命令时会自动检测并询问是否恢复。也可手动使用 `/dev-workflow-continue` 命令恢复上次中断的工作流。

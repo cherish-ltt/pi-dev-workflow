@@ -447,6 +447,12 @@ function captureBaseline(cwd: string): void {
  *
  * Uses git-format status codes (M, A, D) for display consistency.
  * Deduplicates against existing _workflowFileChanges.
+ *
+ * The dedup key includes stepIndex (filePath:stepIndex) so the same file
+ * can appear across different workflow steps (e.g., created by worker in
+ * loop-group, then reviewed by reviewer) without being collapsed into one.
+ * Without :stepIndex, the Set dedup would wrongly skip a file modified in
+ * a later step just because it was already tracked in an earlier step.
  */
 function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): void {
 	const currentChanges = getGitDiffChanges(cwd);
@@ -1238,6 +1244,11 @@ async function executeSingleStep(
 	}
 
 	// ── Capture AI work summary as supplementary chain context ──
+	// We intentionally do NOT create chain contexts from _workflowFileChanges here.
+	// File-change-based chain contexts ("计划制定摘要"/"文档更新摘要") were removed in v0.6.0
+	// because their M/A/D counts provided negligible value for downstream agents compared
+	// to the agent's own free-text work summary. The file-change approach also created
+	// tight coupling between executeSingleStep and the _workflowFileChanges data structure.
 	const workSummary = extractFinalOutput(result.output);
 	if (workSummary) {
 		updateChainContext(`${agentName} 工作总结`, `${agentName} 已完成工作，以下是其工作总结：\n\n${workSummary}`);
@@ -1355,7 +1366,10 @@ async function executeLoopGroup(
 		}
 
 		// ── Capture reviewer work summary as supplementary chain context ──
-		// Reuse already-parsed extractedOutput to avoid double parsing
+		// The old review-chain-context entries ("代码审查反馈"/"精简审查反馈") based on
+		// _workflowFileChanges were removed in v0.6.0 because they duplicated information
+		// from the review report file and polluted chain context with file-path-heavy data.
+		// Reuse already-parsed extractedOutput to avoid double parsing.
 		if (extractedOutput) {
 			updateChainContext(`审查工作总结`,
 				`审查者已完成审查，以下是其审查总结：\n\n${extractedOutput}`
