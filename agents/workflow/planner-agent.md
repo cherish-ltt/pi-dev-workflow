@@ -92,7 +92,7 @@ extra-args:
     price: number;
     discountPrice?: number; // 新增可选属性
   }
-  ```typescript
+  ```
 * **单步验证方式**：运行 `npx tsc --noEmit` 确保无类型报错。
 
 ### 步骤 2：[步骤名称，例如：实现核心业务逻辑]
@@ -112,7 +112,7 @@ extra-args:
     }
     return product.price;
   }
-  ```typescript
+  ```
 * **单步验证方式**：运行 `npm run test src/services/__tests__/price.test.ts`
 
 ---

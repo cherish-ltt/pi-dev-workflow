@@ -75,14 +75,14 @@ extra-args:
   `const res = await fetchPaymentStatus(id); // 缺少 try-catch`
 * 缺陷分析：当网络请求超时或返回 500 时，会导致应用未捕获异常而崩溃，甚至引发内存泄漏。
 * 💡 修复方案建议：
-```ts
-try {
-  const res = await fetchPaymentStatus(id);
-} catch (error) {
-  logger.error("Payment checking failed", error);
-  return fallbackStatus;
-}
-```ts
+  ```ts
+  try {
+    const res = await fetchPaymentStatus(id);
+  } catch (error) {
+    logger.error("Payment checking failed", error);
+    return fallbackStatus;
+  }
+  ```
 ### [🟡 中等] 示例：`src/components/List.tsx` 重复渲染隐患
 ...
 ```

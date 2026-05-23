@@ -456,10 +456,10 @@ function captureBaseline(cwd: string): void {
  */
 function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): void {
 	const currentChanges = getGitDiffChanges(cwd);
-	const seen = new Set(_workflowFileChanges.map(c => `${c.filePath}:${stepIndex}`));
+	const seen = new Set(_workflowFileChanges.map(c => `${c.filePath}:${c.stepIndex}`));
 	
 	for (const change of currentChanges) {
-		if (seen.has(change.path)) continue;
+		if (seen.has(`${change.path}:${stepIndex}`)) continue;
 
 		// ── Baseline filtering ──────────────────────────────
 		// Skip files that were already dirty at workflow start and haven't been touched.
@@ -482,7 +482,7 @@ function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): 
 		// Note: git always uses forward slashes in paths, even on Windows.
 		if (change.path.startsWith(".pi-dev-output/")) continue;
 
-		seen.add(change.path);
+		seen.add(`${change.path}:${stepIndex}`);
 		const type: FileChangeEntry["type"] =
 			change.status === "A" ? "new" :
 			change.status === "D" ? "delete" :
