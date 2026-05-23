@@ -1101,7 +1101,7 @@ async function runAgentWithProgress(
 	const result = await spawnSubagent(agent, task, _workflowCwd, signal, timeoutMs, (progress) => {
 		// Try to parse tool calls from progress messages
 		// Only match if it looks like a file path (contains a dot or path separator)
-		const toolMatch = progress.match(/(edit|read|write|new|bash|grep|find|ls|delete|remove)\s*[:：]\s*(\S+)/i);
+		const toolMatch = progress.match(/(edit|read|write|new|bash|grep|find|ls|delete|remove)\s*[:：]\s*([\w./\\-]+)/i);
 		if (toolMatch) {
 			const toolType = toolMatch[1]!.toLowerCase();
 			const target = toolMatch[2]!;
@@ -1114,9 +1114,9 @@ async function runAgentWithProgress(
 		}
 		// Detect output file paths — only match .pi-dev-output paths belonging to current workflow
 		if (_workflowId) {
-			const outputMatch = progress.match(/\.pi-dev-output\/[^\s,;)\]}]{5,}\.\w+/i);
+			const outputMatch = progress.match(/\.pi-dev-output\/[^\s,;)\]}'"`]{5,}\.\w+/i);
 			if (outputMatch) {
-				const pathCandidate = outputMatch[0]!.trim();
+				const pathCandidate = outputMatch[0]!.trim().replace(/["'`\\]+$/g, '');
 				if (pathCandidate.length > 15 && pathCandidate.length < 300 && pathCandidate.includes(_workflowId)) {
 					addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
 				}
@@ -1154,7 +1154,7 @@ async function runAgentWithProgress(
 	if (_workflowId) {
 		// Only match .pi-dev-output paths containing the current workflow UUID
 		const escapedId = _workflowId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		const outputPattern = new RegExp(`\\.pi-dev-output\\/[^\\s,;)\\]}]*${escapedId}[^\\s,;)\\]}]*`, 'g');
+		const outputPattern = new RegExp(`\\.pi-dev-output\\/[^\\s,;)\\]}'"\\`]*${escapedId}[^\\s,;)\\]}'"\\`]*`, 'g');
 		let m;
 		while ((m = outputPattern.exec(searchText)) !== null) {
 			const path_ = m[0]!.trim();
