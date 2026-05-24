@@ -14,7 +14,8 @@ pi install git:github.com/cherish-ltt/pi-dev-workflow
 
 然后 `/reload` 热加载即可使用所有功能。
 > [!NOTE]  
-> 本pi-package存在sub-agent功能，会与其他使用sub-agent功能的pi-package冲突，但冲突可以修复，请提交issue或自行处理。
+> - 本pi-package存在sub-agent功能，会与其他使用sub-agent功能的pi-package冲突，但冲突可以修复，请提交issue或自行处理。
+> - 本pi-package添加了`APPEND_SYSTEM.md`，存在默认使用中文等特色设定，需要自行修改`prompts/APPEND_SYSTEM.md`。
 
 ## 目录结构
 
@@ -54,6 +55,7 @@ pi-package/
 │   └── to-prd/
 │       └── SKILL.md                 # 从对话上下文生成 PRD 文档
 ├── extensions/
+│   ├── append-system.ts             # 追加APPEND_SYSTEM.md提示词
 │   ├── dev-prompts.ts               # 提示词优化向导（/dev-* 命令）
 │   ├── git-commands.ts              # git-sub-agent 命令
 │   ├── grill-me-agent.ts            # Grill + PRD 运行时：方案追问完善、PRD 生成
