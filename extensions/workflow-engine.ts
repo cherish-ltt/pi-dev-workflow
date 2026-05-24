@@ -389,19 +389,15 @@ function getGitDiffChanges(cwd: string): GitFileChange[] {
 }
 
 /**
- * Convert an internal tool type ("edit"/"new"/"delete") to a git status letter ("M"/"A"/"D").
- * Used to unify all tool entries to git-format display: "M   path", "A   path", "D   path".
+ * 检查路径是否为工作流生成的产物路径（.pi-dev-output/），
+ * 若是则不应出现在 A: M: D: 文件变更列表中。
+ * 该目录已加入 .gitignore，git diff 本身已忽略，
+ * 此函数作为防御性过滤。
  */
-function toGitStatus(toolType: string): string {
-	switch (toolType.toLowerCase()) {
-		case "new": case "write": case "create": case "add": case "created": case "added":
-			return "A";
-		case "delete": case "remove": case "deleted": case "removed":
-			return "D";
-		default:
-			return "M";
-	}
+function isWorkflowArtifactPath(filePath: string): boolean {
+	return filePath.startsWith(".pi-dev-output/");
 }
+
 
 /**
  * Check whether a file's current content hash differs from its baseline.
@@ -453,6 +449,7 @@ function captureBaseline(cwd: string): void {
  * loop-group, then reviewed by reviewer) without being collapsed into one.
  * Without :stepIndex, the Set dedup would wrongly skip a file modified in
  * a later step just because it was already tracked in an earlier step.
+ *
  */
 function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): void {
 	const currentChanges = getGitDiffChanges(cwd);
@@ -480,7 +477,7 @@ function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): 
 		// and should NOT be reported as user repo changes. Real git clients (VSCode, Zed) also
 		// ignore this directory (it's in .gitignore). This filter is defense-in-depth.
 		// Note: git always uses forward slashes in paths, even on Windows.
-		if (change.path.startsWith(".pi-dev-output/")) continue;
+		if (isWorkflowArtifactPath(change.path)) continue;
 
 		seen.add(`${change.path}:${stepIndex}`);
 		const type: FileChangeEntry["type"] =
@@ -1094,35 +1091,81 @@ async function runAgentWithProgress(
 		}
 	}
 
-	// Parse progress messages for tool calls and outputs
-	// NOTE: In-progress parsing is best-effort and intentionally conservative.
-	// Final file change detection relies on git diff --name-status (see updateToolsFromGit below)
-	// which is 100% accurate and free of AI text noise.
-	const result = await spawnSubagent(agent, task, _workflowCwd, signal, timeoutMs, (progress) => {
-		// Try to parse tool calls from progress messages
-		// Only match if it looks like a file path (contains a dot or path separator)
-		const toolMatch = progress.match(/(edit|read|write|new|bash|grep|find|ls|delete|remove)\s*[:：]\s*([\w./\\-]+)/i);
-		if (toolMatch) {
-			const toolType = toolMatch[1]!.toLowerCase();
-			const target = toolMatch[2]!;
-			// Only classify as file operation if it's a file path-like string
-			if (target.includes(".") || target.includes("/") || target.includes("\\")) {
-				const gitStatus = toGitStatus(toolType);
-				addWidgetSubStepTool(stepIndex, agentName, `${gitStatus}   ${target}`);
-				_widgetExtraToolCount++;
-			}
-		}
-		// Detect output file paths — only match .pi-dev-output paths belonging to current workflow
-		if (_workflowId) {
-			const outputMatch = progress.match(/\.pi-dev-output\/[^\s,;)\]}'"`]{5,}\.\w+/i);
-			if (outputMatch) {
-				const pathCandidate = outputMatch[0]!.trim().replace(/["'`\\]+$/g, '');
-				if (pathCandidate.length > 15 && pathCandidate.length < 300 && pathCandidate.includes(_workflowId)) {
-					addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
+	// ── Start git diff polling for real file changes ──
+	// This replaces the unreliable regex-based tool call sniffing that was removed.
+	// git diff --name-status is the same approach used by VSCode, Zed, and every
+	// professional git client — it's deterministic, noise-free, and 100% accurate.
+	let _gitPollTimer: ReturnType<typeof setInterval> | null = null;
+	const _pollSeen = new Set<string>();
+	if (_workflowCwd) {
+		_gitPollTimer = setInterval(() => {
+			try {
+				const currentChanges = getGitDiffChanges(_workflowCwd);
+				for (const change of currentChanges) {
+					const key = `${change.path}:${stepIndex}`;
+					if (_pollSeen.has(key)) continue;
+					_pollSeen.add(key);
+
+					if (isWorkflowArtifactPath(change.path)) continue;
+					if (_workflowBaseline.length > 0) {
+						const baseEntry = _workflowBaseline.find(b => b.path === change.path);
+						if (baseEntry) {
+							if (!hasContentChanged(_workflowCwd, change.path, baseEntry.hash)) continue;
+							// ⭐ 同步删除已变更的基线条目，与 updateToolsFromGit 行为一致
+							_workflowBaseline = _workflowBaseline.filter(b => b.path !== change.path);
+						}
+					}
+
+					// ⭐ Also record in _workflowFileChanges so the completion report file tree
+					// and revertStepChanges have accurate data. The final updateToolsFromGit call
+					// will skip this via seen, so we must record it here.
+					const type: FileChangeEntry["type"] =
+						change.status === "A" ? "new" :
+						change.status === "D" ? "delete" :
+						"edit";
+					_workflowFileChanges.push({
+						agent: agentName,
+						stepIndex,
+						type,
+						filePath: change.path,
+						timestamp: new Date().toISOString(),
+					});
+					addWidgetSubStepTool(stepIndex, agentName, `${change.status}   ${change.path}`);
+					_widgetExtraToolCount++;
+				}
+			} catch { /* 静默忽略 git 错误 */ }
+		}, 5000);
+		_gitPollTimer.unref();
+	}
+
+	// Run the sub-agent with progress reporting
+	// The toolMatch regex sniffing has been removed — it was the primary source of
+	// false positives in the A: M: D: panel (matching AI natural language as tool calls).
+	// File change detection is now handled entirely by git diff polling (above) and
+	// the final updateToolsFromGit call (below), both of which use git's own API.
+	let result;
+	try {
+		result = await spawnSubagent(agent, task, _workflowCwd, signal, timeoutMs, (progress) => {
+			// Detect output file paths — only match .pi-dev-output paths belonging to current workflow
+			if (_workflowId) {
+				const outputMatch = progress.match(/\.pi-dev-output\/[a-zA-Z0-9_\/\.-]+/i);
+				if (outputMatch) {
+					const pathCandidate = outputMatch[0]!.trim();
+					// ⭐ 严格白名单：拒绝中文、引号、括号等非路径字符
+					if (pathCandidate.length > 15 && pathCandidate.length < 300 &&
+						pathCandidate.includes(_workflowId) &&
+						/^[\w.\/-]+$/.test(pathCandidate)) {
+						addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
+					}
 				}
 			}
+		}, _workflowId ? { workflowId: _workflowId } : undefined);
+	} finally {
+		if (_gitPollTimer) {
+			clearInterval(_gitPollTimer);
+			_gitPollTimer = null;
 		}
-	}, _workflowId ? { workflowId: _workflowId } : undefined);
+	}
 
 	const agentDuration = Date.now() - agentStartTime;
 
@@ -1142,23 +1185,30 @@ async function runAgentWithProgress(
 	// from code snippets). Instead, we rely entirely on git diff --name-status, which is
 	// the same approach used by VSCode, Zed, and every other professional git client.
 	// It's deterministic, noise-free, and always produces correct relative paths.
-	const allOutput = (result.output || "") + "\n" + (result.stderr || "");
 	const finalOutput = extractFinalOutput(result.output) || result.output;
-	const searchText = allOutput + "\n" + finalOutput;
 
 	// Find output file paths (plans, reviews) for display in the "output:" section
 	// These are workflow artifacts (.pi-dev-output/) — only show files belonging to
 	// the CURRENT workflow to avoid cross-contamination from previous runs.
 	// Note: file change detection itself relies exclusively on git diff below, not text parsing.
+	// ⭐ IMPORTANT: Only search in CLEAN extracted text (finalOutput), NOT raw JSON output.
+	//   The old approach concatenated allOutput (raw JSON + stderr) into searchText and
+	//   matched against it, producing false positives from JSON stringified content.
+	//   By restricting to extractFinalOutput's clean text, we avoid matching against
+	//   JSON-escaped paths, code snippets, or natural language in raw agent output.
+	const cleanText = finalOutput || result.output || "";
 	const seenOutputs = new Set<string>();
 	if (_workflowId) {
 		// Only match .pi-dev-output paths containing the current workflow UUID
 		const escapedId = _workflowId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		const outputPattern = new RegExp(`\\.pi-dev-output\\/[^\\s,;)\\]}'"\\`]*${escapedId}[^\\s,;)\\]}'"\\`]*`, 'g');
+		const outputPattern = new RegExp(`\\.pi-dev-output\\/[a-zA-Z0-9_\\/.-]*${escapedId}[a-zA-Z0-9_\\/.-]*`, 'g');
 		let m;
-		while ((m = outputPattern.exec(searchText)) !== null) {
+		while ((m = outputPattern.exec(cleanText)) !== null) {
 			const path_ = m[0]!.trim();
 			if (path_.length > 15 && path_.length < 300 && !seenOutputs.has(path_)) {
+				// ⭐ 严格白名单：仅允许 [a-zA-Z0-9_./-] 字符
+				// 拒绝包含中文、引号、括号、空格等非路径字符的乱码匹配
+				if (!/^[\w.\/-]+$/.test(path_)) continue;
 				seenOutputs.add(path_);
 				addWidgetSubStepOutput(stepIndex, agentName, path_);
 			}
@@ -1167,9 +1217,11 @@ async function runAgentWithProgress(
 		// No workflow ID (unlikely): match .pi-dev-output paths conservatively
 		const outputPattern = /\.pi-dev-output\/[a-zA-Z0-9_\/-]+\.[a-zA-Z0-9]+/g;
 		let m;
-		while ((m = outputPattern.exec(searchText)) !== null) {
+		while ((m = outputPattern.exec(cleanText)) !== null) {
 			const path_ = m[0]!.trim();
 			if (path_.length > 15 && path_.length < 300 && !seenOutputs.has(path_)) {
+				// ⭐ 严格白名单
+				if (!/^[\w.\/-]+$/.test(path_)) continue;
 				seenOutputs.add(path_);
 				addWidgetSubStepOutput(stepIndex, agentName, path_);
 			}

@@ -54,7 +54,7 @@ extra-args:
 
 写入 `.pi-dev-output/pi-review/md/` 的文件必须采用以下格式：
 
-```markdown
+````markdown
 # 🔍 代码审查报告 — {功能/任务名称}
 
 ## 📊 审计摘要
@@ -64,7 +64,7 @@ extra-args:
 
 | 🔴 严重 (Critical) | 🟡 中等 (Medium) | 🟢 低优先级 (Low) |
 | :---: | :---: | :---: |
-| 0 | 2 | 3 |
+| 1 | 2 | 3 |
 
 ---
 
@@ -85,7 +85,16 @@ extra-args:
   ```
 ### [🟡 中等] 示例：`src/components/List.tsx` 重复渲染隐患
 ...
+
+### [🟢 低优先级] 示例：`src/application/mod.rs` 未格式化
+...
+
+```json
+[REVIEW_SUMMARY]
+{"maxSeverity":"critical","critical":1,"medium":2,"low":3}
+[/REVIEW_SUMMARY]
 ```
+````
 
 ---
 

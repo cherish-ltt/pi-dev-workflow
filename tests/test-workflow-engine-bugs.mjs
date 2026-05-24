@@ -502,12 +502,13 @@ assertTrue(hasWorkSummaryKey, "executeSingleStep 中保留 '工作总结' 条目
 const hasWorkSummaryUpdate = fullSingleStep.includes('updateChainContext');
 assertTrue(hasWorkSummaryUpdate, "executeSingleStep 中仍有 updateChainContext 调用（工作总结）");
 
-// Verify the removed summary keys are no longer present
-const hasPlannerKeyRemoved = !fullSingleStep.includes('"计划制定摘要"');
-assertTrue(hasPlannerKeyRemoved, "executeSingleStep 中已移除 '计划制定摘要' key");
-
-const hasDocWriterKeyRemoved = !fullSingleStep.includes('"文档更新摘要"');
-assertTrue(hasDocWriterKeyRemoved, "executeSingleStep 中已移除 '文档更新摘要' key");
+// Verify the removed summary keys are no longer present in updateChainContext calls
+// (comments may still reference them for historical context — that's fine)
+const chainCtxCalls = [...fullSingleStep.matchAll(/updateChainContext\(`([^`]+)`/g)].map(m => m[1]);
+const plannerInCode = chainCtxCalls.some(k => k.includes('计划制定摘要'));
+assertFalse(plannerInCode, "updateChainContext 中已不使用 '计划制定摘要' key");
+const docWriterInCode = chainCtxCalls.some(k => k.includes('文档更新摘要'));
+assertFalse(docWriterInCode, "updateChainContext 中已不使用 '文档更新摘要' key");
 
 
 console.log("\n═══ Bug H 测试 — Agent 前置元数据解析 ═══\n");
@@ -654,20 +655,25 @@ console.log("\n");
 
 console.log("═══ Bug J 测试 — _workflowFileChanges 仅来自 git diff ═══\n");
 
-// ── Test J1: _workflowFileChanges.push 仅出现在 updateToolsFromGit ──
-console.log("📋 测试 J1: _workflowFileChanges.push 仅出现在 updateToolsFromGit\n");
+// ── Test J1: _workflowFileChanges.push 出现在 updateToolsFromGit 和 git diff 轮询 ──
+console.log("📋 测试 J1: _workflowFileChanges.push 出现在 updateToolsFromGit 和 git diff 轮询\n");
 
 // Count all _workflowFileChanges.push occurrences
+// There should be 2: one in git diff polling (runAgentWithProgress) and one in updateToolsFromGit
 const pushMatches = [...source.matchAll(/_workflowFileChanges\.push\(/g)];
-assertEq(pushMatches.length, 1, "_workflowFileChanges.push 仅出现 1 次");
+assertEq(pushMatches.length, 2, "_workflowFileChanges.push 出现 2 次（轮询 + updateToolsFromGit）");
 
-// Verify the single push is inside updateToolsFromGit by checking
-// the function body of updateToolsFromGit contains the push.
+// Verify the push is inside updateToolsFromGit
 const updateToolsStart = source.indexOf("function updateToolsFromGit");
 const nextFuncStart = source.indexOf("function saveCheckpoint", updateToolsStart);
 const updateToolsBody = source.slice(updateToolsStart, nextFuncStart);
-const pushInUpdateTools = updateToolsBody.includes("_workflowFileChanges.push");
-assertTrue(pushInUpdateTools, "updateToolsFromGit 函数体内包含 _workflowFileChanges.push");
+assertTrue(updateToolsBody.includes("_workflowFileChanges.push"), "updateToolsFromGit 函数体内包含 _workflowFileChanges.push");
+
+// Verify the push is also inside the git diff polling (setInterval) in runAgentWithProgress
+const runAgentStart = source.indexOf("async function runAgentWithProgress");
+const runAgentEnd = source.indexOf("async function executeSingleStep", runAgentStart);
+const runAgentBody = source.slice(runAgentStart, runAgentEnd);
+assertTrue(runAgentBody.includes("_workflowFileChanges.push"), "git diff 轮询（setInterval）中包含 _workflowFileChanges.push");
 
 // ── Test J2: addWidgetSubStepTool 不再污染 _workflowFileChanges ──
 console.log("\n📋 测试 J2: addWidgetSubStepTool 不再污染 _workflowFileChanges\n");
@@ -677,7 +683,7 @@ const addWidgetFunc = source.slice(
 	source.indexOf("function addWidgetSubStepOutput")
 );
 const hasNoFileChangesRef = !addWidgetFunc.includes("_workflowFileChanges");
-assertTrue(hasNoFileChangesRef, "addWidgetSubStepTool 中不再引用 _workflowFileChanges");
+assertTrue(hasNoFileChangesRef, "addWidgetSubStepTool 函数体中不再引用 _workflowFileChanges");
 
 // ── Test J3: executeSingleStep 中不再有基于 _workflowFileChanges 的统计 ──
 console.log("\n📋 测试 J3: executeSingleStep 中不再有 '执行摘要' 类 chain context\n");
@@ -694,8 +700,11 @@ const loopGroupBody = source.slice(loopGroupStart);
 const hasNoCodeImplSummary = !loopGroupBody.includes('"代码实施摘要"') && !loopGroupBody.includes('"代码精简摘要"');
 assertTrue(hasNoCodeImplSummary, "executeLoopGroup 中不再有 '代码实施摘要' 或 '代码精简摘要' chain context");
 
-const hasNoReviewFeedbackKey = !loopGroupBody.includes('"代码审查反馈"') && !loopGroupBody.includes('"精简审查反馈"');
-assertTrue(hasNoReviewFeedbackKey, "executeLoopGroup 中不再有 '代码审查反馈' 或 '精简审查反馈' chain context");
+// Verify the removed review feedback keys are no longer present in updateChainContext calls
+// (comments may still reference them for historical context — that's fine)
+const chainCtxCallsLoop = [...loopGroupBody.matchAll(/updateChainContext\(`([^`]+)`/g)].map(m => m[1]);
+const reviewInCode = chainCtxCallsLoop.some(k => k.includes('代码审查反馈') || k.includes('精简审查反馈'));
+assertFalse(reviewInCode, "updateChainContext 中已不使用 '代码审查反馈' 或 '精简审查反馈' key");
 
 // ── Test J5: 工作总结条目在所有 agent 函数中仍保留 ──
 console.log("\n📋 测试 J5: '工作总结' 条目在所有 agent 函数中仍保留\n");
@@ -733,11 +742,14 @@ console.log("\n📋 测试 K3: outputPathPatterns 已简化\n");
 const hasOutputPathPatterns = source.includes("const outputPathPatterns = [");
 assertFalse(hasOutputPathPatterns, "outputPathPatterns 数组已移除（替换为 inline workflowId 过滤）");
 
-// ── Test K4: updateToolsFromGit 有 .pi-dev-output/ 过滤 ──
-console.log("\n📋 测试 K4: updateToolsFromGit 过滤 .pi-dev-output/\n");
+// ── Test K4: updateToolsFromGit 有 isWorkflowArtifactPath 过滤 ──
+console.log("\n📋 测试 K4: updateToolsFromGit 使用 isWorkflowArtifactPath 过滤\n");
 
-const hasDotPiDevFilter = source.includes('change.path.startsWith(".pi-dev-output/")');
-assertTrue(hasDotPiDevFilter, "updateToolsFromGit 跳过 .pi-dev-output/ 路径");
+const hasIsWorkflowArtifactPath = source.includes('isWorkflowArtifactPath(change.path)');
+assertTrue(hasIsWorkflowArtifactPath, "updateToolsFromGit 使用 isWorkflowArtifactPath 跳过 .pi-dev-output/ 路径");
+
+const hasIsWorkflowArtifactFunc = source.includes('function isWorkflowArtifactPath');
+assertTrue(hasIsWorkflowArtifactFunc, "isWorkflowArtifactPath 辅助函数存在");
 
 // ── Test K5: output 路径匹配使用 escapedId + workflowId ──
 console.log("\n📋 测试 K5: output 路径使用 workflowId 过滤\n");
@@ -751,15 +763,19 @@ console.log("\n📋 测试 K6: progress handler 使用 workflowId\n");
 const hasIncludesWorkflowId = source.includes("pathCandidate.includes(_workflowId)");
 assertTrue(hasIncludesWorkflowId, "progress handler 使用 pathCandidate.includes(_workflowId)");
 
-// ── Test K7: addWidgetSubStepTool 只来自 git diff + progress handler ──
-console.log("\n📋 测试 K7: addWidgetSubStepTool 只来自必要来源\n");
+// ── Test K7: addWidgetSubStepTool 只来自 git diff（regex 嗅探已移除）──
+console.log("\n📋 测试 K7: addWidgetSubStepTool 仅来自 git diff\n");
 
-// Verify the two known call sites exist:
-// 1. updateToolsFromGit: calls addWidgetSubStepTool with git status + path
-// 2. runAgentWithProgress progress handler: calls addWidgetSubStepTool with parsed toolMatch
-// Both are runtime call sites (not the function definition itself).
+// Verify the toolMatch regex sniffing has been removed (source 1)
+const hasToolMatchRegex = source.includes('const toolMatch = progress.match(/(edit|read|write|new|bash|grep|find|ls|delete|remove)');
+assertFalse(hasToolMatchRegex, "progress handler 中已移除 toolMatch 正则 (source 1)");
+
+// Verify the updateToolsFromGit call site still exists
 assertTrue(source.includes("addWidgetSubStepTool(stepIndex, agentName, `${change.status}   ${change.path}`)"), "updateToolsFromGit 调用 addWidgetSubStepTool");
-assertTrue(source.includes("addWidgetSubStepTool(stepIndex, agentName, `${gitStatus}   ${target}`)"), "progress handler 调用 addWidgetSubStepTool");
+
+// Verify git diff polling timer exists (replacement for regex sniffing)
+const hasGitPollTimer = source.includes('_gitPollTimer = setInterval');
+assertTrue(hasGitPollTimer, "git diff 轮询定时器已添加");
 
 // ── Test K8: addWidgetSubStepOutput 仍存在 (output 路径展示有用) ──
 console.log("\n📋 测试 K8: addWidgetSubStepOutput 仍保留\n");
@@ -767,6 +783,118 @@ console.log("\n📋 测试 K8: addWidgetSubStepOutput 仍保留\n");
 const hasAddWidgetOutput = source.includes("function addWidgetSubStepOutput");
 assertTrue(hasAddWidgetOutput, "addWidgetSubStepOutput 函数声明仍保留");
 
+
+
+console.log("\n═══ Bug L 测试 — output 路径白名单验证 ═══\n");
+
+// ── Test L1: output 路径白名单验证 ──
+console.log("\n📋 测试 L1: output 路径白名单逻辑\n");
+
+function isValidOutputPath(path) {
+	return /^[\w.\/-]+$/.test(path) &&
+		path.length > 15 && path.length < 300 &&
+		path.includes("019e57e7");
+}
+
+// 应接受的合法路径
+assertTrue(isValidOutputPath(".pi-dev-output/pi-plans/20260524-test-019e57e7.md"), "合法路径应被接受");
+assertTrue(isValidOutputPath(".pi-dev-output/pi-review/md/review-20260524-019e57e7.md"), "review 路径应被接受");
+
+// 应拒绝的乱码路径
+assertFalse(isValidOutputPath(".pi-dev-output/pi-plans/中grepUUID\"019e57e7\"找到)"), "含中文路径应被拒绝");
+assertFalse(isValidOutputPath(".pi-dev-output/pi-plans/（测试）019e57e7.md"), "含括号路径应被拒绝");
+
+// ── Test L2: post-completion output 检测仅搜索 clean text ──
+console.log("\n📋 测试 L2: output 检测仅搜索 clean text（source 2 修复验证）\n");
+
+// 验证源代码中 outputPattern.exec 搜索的是 cleanText 而非 searchText
+const hasSearchTextOutput = source.includes('outputPattern.exec(searchText)');
+assertFalse(hasSearchTextOutput, "output 检测不再搜索 searchText (raw JSON)");
+
+// 验证替换为 cleanText
+const hasCleanTextOutput = source.includes('outputPattern.exec(cleanText)');
+assertTrue(hasCleanTextOutput, "output 检测搜索 cleanText (extracted text)");
+
+// ── Test L3: post-completion output 有白名单验证 ──
+console.log("\n📋 测试 L3: post-completion output 有白名单验证\n");
+
+const hasWhitelistCheck = source.includes('/^[\\w.\\/-]+\$/.test(path_)');
+assertTrue(hasWhitelistCheck, "post-completion output 检测包含 /^[\\w.\\/-]+\$/ 白名单验证");
+
+// ── Test L4: progress handler output 检测使用 whitelist regex ──
+console.log("\n📋 测试 L4: progress handler output 检测使用 whitelist regex\n");
+
+const hasProgressWhitelist = source.includes('.pi-dev-output\\/[a-zA-Z0-9_\\/\\.-]+');
+assertTrue(hasProgressWhitelist, "progress handler 使用 [a-zA-Z0-9_\\/\\.-]+ 白名单正则");
+
+// ── Test L5: isWorkflowArtifactPath 在 git diff 轮询中使用 ──
+console.log("\n📋 测试 L5: isWorkflowArtifactPath 在 git diff 轮询中使用\n");
+
+const hasPollIsWorkflowArtifact = source.includes('isWorkflowArtifactPath(change.path)');
+assertTrue(hasPollIsWorkflowArtifact, "git diff 轮询使用 isWorkflowArtifactPath 过滤");
+
+// ── Test L6: git diff 轮询也向 _workflowFileChanges 推送 ──
+console.log("\n📋 测试 L6: git diff 轮询向 _workflowFileChanges 推送\n");
+
+// Verify the polling code pushes to _workflowFileChanges before addWidgetSubStepTool
+const pollTimerBodyStart = source.indexOf('_gitPollTimer = setInterval');
+const pollTimerBodyEnd = source.indexOf('_gitPollTimer.unref()');
+const pollTimerBody = source.slice(pollTimerBodyStart, pollTimerBodyEnd);
+const hasPushInPoll = pollTimerBody.includes('_workflowFileChanges.push');
+assertTrue(hasPushInPoll, "git diff 轮询（setInterval）中包含 _workflowFileChanges.push");
+
+// Verify the type mapping (A→new, D→delete, else→edit) exists in polling code
+const hasTypeMappingInPoll = pollTimerBody.includes('change.status === "A" ? "new"');
+assertTrue(hasTypeMappingInPoll, "git diff 轮询中文件变更的类型映射正确");
+
+
+
+// ── Test L7: _pollSeen 使用 path:stepIndex 而非 status:path ──
+console.log("\n📋 测试 L7: _pollSeen 使用 path:stepIndex 而非 status:path\n");
+
+// 验证轮询代码不再使用 status:path 作为键
+const hasStatusPathKeyInPoll = source.includes('const key = `\${change.status}:\${change.path}`');
+assertFalse(hasStatusPathKeyInPoll, "_pollSeen 不使用 status:path 作为键");
+
+// 验证轮询代码使用 path:stepIndex 作为键
+const hasPathStepKeyInPoll = source.includes('const key = `\${change.path}:\${stepIndex}`');
+assertTrue(hasPathStepKeyInPoll, "_pollSeen 使用 path:stepIndex 作为键");
+
+
+// ── Test L8: toGitStatus 函数已删除 ──
+console.log("\n📋 测试 L8: toGitStatus 函数已删除（无调用者死代码）\n");
+
+const hasToGitStatusFunc = source.includes("function toGitStatus(");
+assertFalse(hasToGitStatusFunc, "toGitStatus 函数已删除");
+
+const hasToGitStatusRef = source.includes("toGitStatus");
+assertFalse(hasToGitStatusRef, "toGitStatus 无任何引用残留");
+
+
+// ── Test L9: updateToolsFromGit 不再有 pollSeen 参数 ──
+console.log("\n📋 测试 L9: updateToolsFromGit 不再有 pollSeen 死代码参数\n");
+
+const hasPollSeenParam = source.includes("pollSeen?: Set<string>");
+assertFalse(hasPollSeenParam, "updateToolsFromGit 无 pollSeen 参数");
+
+const hasPollSeenCheck = source.includes("pollSeen?.has(");
+assertFalse(hasPollSeenCheck, "updateToolsFromGit 无 pollSeen?.has() 检查");
+
+const hasPollSeenPass = source.includes("updateToolsFromGit(_workflowCwd, stepIndex, agentName, _pollSeen)");
+assertFalse(hasPollSeenPass, "updateToolsFromGit 调用处无 _pollSeen 参数传递");
+
+
+// ── Test L10: post-completion output 正则使用白名单字符类 ──
+console.log("\n📋 测试 L10: post-completion output 正则使用白名单字符类\n");
+
+// 验证 post-completion outputPattern 使用白名单 [a-zA-Z0-9] 而非排除法 [^...]
+const hasPostCompletionWhitelist = source.includes("outputPattern = new RegExp(\`\\\\.pi-dev-output\\\\/[a-zA-Z0-9_\\\\/.-]");
+assertTrue(hasPostCompletionWhitelist, "post-completion output 正则使用 [a-zA-Z0-9_\\\\/.-] 白名单字符类");
+
+// 验证不再使用排除字符类 (用反确认方式)
+const hasNegatedClassOutput = source.includes("\\[^\\\\s,;)\\\\]}");
+const hasNegatedClassOutput2 = source.includes("[^\\\\s,;)\\\\]}");
+assertFalse(hasNegatedClassOutput || hasNegatedClassOutput2, "post-completion output 正则不使用排除法 [^\\\\s,;)\\\\]}");
 
 
 console.log("\n═══════════════════════════════════════════════════════\n");
