@@ -398,20 +398,6 @@ function isWorkflowArtifactPath(filePath: string): boolean {
 	return filePath.startsWith(".pi-dev-output/");
 }
 
-/**
- * Convert an internal tool type ("edit"/"new"/"delete") to a git status letter ("M"/"A"/"D").
- * Used to unify all tool entries to git-format display: "M   path", "A   path", "D   path".
- */
-function toGitStatus(toolType: string): string {
-	switch (toolType.toLowerCase()) {
-		case "new": case "write": case "create": case "add": case "created": case "added":
-			return "A";
-		case "delete": case "remove": case "deleted": case "removed":
-			return "D";
-		default:
-			return "M";
-	}
-}
 
 /**
  * Check whether a file's current content hash differs from its baseline.
@@ -464,19 +450,13 @@ function captureBaseline(cwd: string): void {
  * Without :stepIndex, the Set dedup would wrongly skip a file modified in
  * a later step just because it was already tracked in an earlier step.
  *
- * @param pollSeen Optional set of "status:path" keys already handled by
- *   git diff polling (real-time). Changes matching this set are skipped
- *   to avoid double counting with the polling timer.
  */
-function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string, pollSeen?: Set<string>): void {
+function updateToolsFromGit(cwd: string, stepIndex: number, agentName: string): void {
 	const currentChanges = getGitDiffChanges(cwd);
 	const seen = new Set(_workflowFileChanges.map(c => `${c.filePath}:${c.stepIndex}`));
 	
 	for (const change of currentChanges) {
 		if (seen.has(`${change.path}:${stepIndex}`)) continue;
-
-		// ⭐ 跳过已被 git diff 轮询实时添加的变更（避免重复计数）
-		if (pollSeen?.has(`${change.status}:${change.path}`)) continue;
 
 		// ── Baseline filtering ──────────────────────────────
 		// Skip files that were already dirty at workflow start and haven't been touched.
@@ -1122,7 +1102,7 @@ async function runAgentWithProgress(
 			try {
 				const currentChanges = getGitDiffChanges(_workflowCwd);
 				for (const change of currentChanges) {
-					const key = `${change.status}:${change.path}`;
+					const key = `${change.path}:${stepIndex}`;
 					if (_pollSeen.has(key)) continue;
 					_pollSeen.add(key);
 
@@ -1138,7 +1118,7 @@ async function runAgentWithProgress(
 
 					// ⭐ Also record in _workflowFileChanges so the completion report file tree
 					// and revertStepChanges have accurate data. The final updateToolsFromGit call
-					// will skip this via seen/pollSeen, so we must record it here.
+					// will skip this via seen, so we must record it here.
 					const type: FileChangeEntry["type"] =
 						change.status === "A" ? "new" :
 						change.status === "D" ? "delete" :
@@ -1219,7 +1199,7 @@ async function runAgentWithProgress(
 	if (_workflowId) {
 		// Only match .pi-dev-output paths containing the current workflow UUID
 		const escapedId = _workflowId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		const outputPattern = new RegExp(`\\.pi-dev-output\\/[^\\s,;)\\]}]*${escapedId}[^\\s,;)\\]}]*`, 'g');
+		const outputPattern = new RegExp(`\\.pi-dev-output\\/[a-zA-Z0-9_\\/.-]*${escapedId}[a-zA-Z0-9_\\/.-]*`, 'g');
 		let m;
 		while ((m = outputPattern.exec(cleanText)) !== null) {
 			const path_ = m[0]!.trim();
@@ -1247,9 +1227,7 @@ async function runAgentWithProgress(
 	}
 
 	// ── Update file changes from git diff (more accurate than text scraping) ──	
-	// Pass _pollSeen to skip changes already handled by real-time git diff polling,
-	// preventing duplicate entries in sub.tools and double counting of _widgetExtraToolCount.
-	updateToolsFromGit(_workflowCwd, stepIndex, agentName, _pollSeen);
+	updateToolsFromGit(_workflowCwd, stepIndex, agentName);
 	// Update sub-step status based on result
 	const subStatus: WorkflowSubStepWidgetState["status"] =
 		result.exitCode === 0 ? "done" :

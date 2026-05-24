@@ -848,6 +848,55 @@ const hasTypeMappingInPoll = pollTimerBody.includes('change.status === "A" ? "ne
 assertTrue(hasTypeMappingInPoll, "git diff 轮询中文件变更的类型映射正确");
 
 
+
+// ── Test L7: _pollSeen 使用 path:stepIndex 而非 status:path ──
+console.log("\n📋 测试 L7: _pollSeen 使用 path:stepIndex 而非 status:path\n");
+
+// 验证轮询代码不再使用 status:path 作为键
+const hasStatusPathKeyInPoll = source.includes('const key = `\${change.status}:\${change.path}`');
+assertFalse(hasStatusPathKeyInPoll, "_pollSeen 不使用 status:path 作为键");
+
+// 验证轮询代码使用 path:stepIndex 作为键
+const hasPathStepKeyInPoll = source.includes('const key = `\${change.path}:\${stepIndex}`');
+assertTrue(hasPathStepKeyInPoll, "_pollSeen 使用 path:stepIndex 作为键");
+
+
+// ── Test L8: toGitStatus 函数已删除 ──
+console.log("\n📋 测试 L8: toGitStatus 函数已删除（无调用者死代码）\n");
+
+const hasToGitStatusFunc = source.includes("function toGitStatus(");
+assertFalse(hasToGitStatusFunc, "toGitStatus 函数已删除");
+
+const hasToGitStatusRef = source.includes("toGitStatus");
+assertFalse(hasToGitStatusRef, "toGitStatus 无任何引用残留");
+
+
+// ── Test L9: updateToolsFromGit 不再有 pollSeen 参数 ──
+console.log("\n📋 测试 L9: updateToolsFromGit 不再有 pollSeen 死代码参数\n");
+
+const hasPollSeenParam = source.includes("pollSeen?: Set<string>");
+assertFalse(hasPollSeenParam, "updateToolsFromGit 无 pollSeen 参数");
+
+const hasPollSeenCheck = source.includes("pollSeen?.has(");
+assertFalse(hasPollSeenCheck, "updateToolsFromGit 无 pollSeen?.has() 检查");
+
+const hasPollSeenPass = source.includes("updateToolsFromGit(_workflowCwd, stepIndex, agentName, _pollSeen)");
+assertFalse(hasPollSeenPass, "updateToolsFromGit 调用处无 _pollSeen 参数传递");
+
+
+// ── Test L10: post-completion output 正则使用白名单字符类 ──
+console.log("\n📋 测试 L10: post-completion output 正则使用白名单字符类\n");
+
+// 验证 post-completion outputPattern 使用白名单 [a-zA-Z0-9] 而非排除法 [^...]
+const hasPostCompletionWhitelist = source.includes("outputPattern = new RegExp(\`\\\\.pi-dev-output\\\\/[a-zA-Z0-9_\\\\/.-]");
+assertTrue(hasPostCompletionWhitelist, "post-completion output 正则使用 [a-zA-Z0-9_\\\\/.-] 白名单字符类");
+
+// 验证不再使用排除字符类 (用反确认方式)
+const hasNegatedClassOutput = source.includes("\\[^\\\\s,;)\\\\]}");
+const hasNegatedClassOutput2 = source.includes("[^\\\\s,;)\\\\]}");
+assertFalse(hasNegatedClassOutput || hasNegatedClassOutput2, "post-completion output 正则不使用排除法 [^\\\\s,;)\\\\]}");
+
+
 console.log("\n═══════════════════════════════════════════════════════\n");
 console.log(`📊 结果: ${pass} 通过, ${fail} 失败\n`);
 
