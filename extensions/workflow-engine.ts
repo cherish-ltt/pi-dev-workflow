@@ -1143,29 +1143,31 @@ async function runAgentWithProgress(
 	// false positives in the A: M: D: panel (matching AI natural language as tool calls).
 	// File change detection is now handled entirely by git diff polling (above) and
 	// the final updateToolsFromGit call (below), both of which use git's own API.
-	const result = await spawnSubagent(agent, task, _workflowCwd, signal, timeoutMs, (progress) => {
-		// Detect output file paths — only match .pi-dev-output paths belonging to current workflow
-		if (_workflowId) {
-			const outputMatch = progress.match(/\.pi-dev-output\/[a-zA-Z0-9_\/\.-]+/i);
-			if (outputMatch) {
-				const pathCandidate = outputMatch[0]!.trim();
-				// ⭐ 严格白名单：拒绝中文、引号、括号等非路径字符
-				if (pathCandidate.length > 15 && pathCandidate.length < 300 &&
-					pathCandidate.includes(_workflowId) &&
-					/^[\w.\/-]+$/.test(pathCandidate)) {
-					addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
+	let result;
+	try {
+		result = await spawnSubagent(agent, task, _workflowCwd, signal, timeoutMs, (progress) => {
+			// Detect output file paths — only match .pi-dev-output paths belonging to current workflow
+			if (_workflowId) {
+				const outputMatch = progress.match(/\.pi-dev-output\/[a-zA-Z0-9_\/\.-]+/i);
+				if (outputMatch) {
+					const pathCandidate = outputMatch[0]!.trim();
+					// ⭐ 严格白名单：拒绝中文、引号、括号等非路径字符
+					if (pathCandidate.length > 15 && pathCandidate.length < 300 &&
+						pathCandidate.includes(_workflowId) &&
+						/^[\w.\/-]+$/.test(pathCandidate)) {
+						addWidgetSubStepOutput(stepIndex, agentName, pathCandidate);
+					}
 				}
 			}
+		}, _workflowId ? { workflowId: _workflowId } : undefined);
+	} finally {
+		if (_gitPollTimer) {
+			clearInterval(_gitPollTimer);
+			_gitPollTimer = null;
 		}
-	}, _workflowId ? { workflowId: _workflowId } : undefined);
+	}
 
 	const agentDuration = Date.now() - agentStartTime;
-
-	// ── Clean up git diff polling timer ──
-	if (_gitPollTimer) {
-		clearInterval(_gitPollTimer);
-		_gitPollTimer = null;
-	}
 
 	// Record agent run in history
 	_workflowAgentRunHistory.push({
