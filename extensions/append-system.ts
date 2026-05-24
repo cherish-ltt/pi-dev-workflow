@@ -30,7 +30,7 @@ export default function (pi: ExtensionAPI) {
 		if (!content) return; // 无可追加内容
 
 		return {
-			systemPrompt: event.systemPrompt + "\n\n" + content,
+			systemPrompt: (event.systemPrompt || "") + "\n\n" + content,
 		};
 	});
 }
