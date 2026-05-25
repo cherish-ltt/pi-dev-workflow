@@ -31,7 +31,7 @@ extra-args:
 ## 输出格式
 
 将所有问题放在一个 JSON 响应中输出。不要前言或解释。
-仅输出 JSON 对象：{"questions": [{"id": 1, "question": "...", "options": ["..."]}]}
+仅输出 JSON 对象：{"questions": [{"id": 1, "question": "...", "options": ["<推荐>...", "...", "..."]}]}
 
 ## 数量
 
