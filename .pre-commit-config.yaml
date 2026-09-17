@@ -19,11 +19,10 @@ repos:
       - id: check-merge-conflict
         name: 检查合并冲突标记
 
-      # 检查添加的图片是否过大（默认限制 10240KB，即 10MB）
+      # 检查新增文件是否过大（默认限制 10240KB，即 10MB）
       - id: check-added-large-files
         name: 检查添加文件是否过大
         args: ['--maxkb=10240']
-        files: '\.(jpeg|jpg|png)$'
 
       # 检查 YAML 语法是否正确（如 CI 配置、docker-compose 等）
       - id: check-yaml

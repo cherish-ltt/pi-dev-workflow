@@ -15,7 +15,7 @@ pi install git:github.com/cherish-ltt/pi-dev-workflow
 然后 `/reload` 热加载即可使用所有功能。
 > [!NOTE]
 > - 本 pi-package 已移除子代理，不会与其他 pi-package 的子代理功能冲突。
-> - 本 pi-package 添加了 `APPEND_SYSTEM.md`，存在默认使用中文等特色设定，需要可自行修改 `prompts/APPEND_SYSTEM.md`。
+> - 本 pi-package 添加了 `APPEND_SYSTEM.md`，存在默认使用中文等特色设定，可自行修改 `prompts/APPEND_SYSTEM.md`。
 
 ## 目录结构
 
