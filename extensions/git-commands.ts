@@ -11,7 +11,9 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { uiInput } from "./ui-helpers";
-import { getLastAssistantTextAfter } from "./grill-me-agent";
+import { getLastAssistantTextAfter, waitForIdleWithTimeout } from "./session-utils";
+
+const COMMIT_PREFIX_RE = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?[!]?: /;
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -39,14 +41,16 @@ async function generateCommitMessage(pi: ExtensionAPI, ctx: ExtensionCommandCont
 	const sentAt = Date.now();
 	pi.sendUserMessage(task, { deliverAs: "followUp" });
 	try {
-		await ctx.waitForIdle(60_000);
+		await waitForIdleWithTimeout(ctx, 60_000);
 	} catch {
 		// Agent may have failed; fall back to a generic message
 	}
 
-	let text = getLastAssistantTextAfter(ctx, sentAt);
-	text = text.trim().split("\n")[0].slice(0, 120);
-	return text || "chore: 自动提交变更";
+	const firstLine = getLastAssistantTextAfter(ctx, sentAt).trim().split("\n")[0].slice(0, 120);
+	if (!COMMIT_PREFIX_RE.test(firstLine)) {
+		return "chore: 自动提交变更";
+	}
+	return firstLine;
 }
 
 /** Run a git command through pi's executor and report the outcome. */
