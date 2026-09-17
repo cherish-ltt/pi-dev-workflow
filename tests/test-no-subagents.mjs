@@ -81,7 +81,7 @@ console.log("\n📋 git-commands.ts\n");
 
 assertNotIncludes("extensions/git-commands.ts", "./sub-agents", "不再引入 sub-agents");
 assertNotIncludes("extensions/git-commands.ts", "spawnSubagent", "不再 spawn 子进程");
-assertIncludes("extensions/git-commands.ts", "./session-utils", "从 session-utils 获取共享工具");
+assertIncludes("extensions/git-commands.ts", "分批提交", "空消息时交由主代理分批提交");
 assertIncludes("extensions/git-commands.ts", "pi.exec(\"git\"", "通过 pi.exec 直接执行 git");
 assertIncludes("extensions/git-commands.ts", "git-commit", "保留 /git-commit 命令");
 assertIncludes("extensions/git-commands.ts", "git-push", "保留 /git-push 命令");
@@ -95,7 +95,7 @@ console.log("\n📋 grill-me-agent.ts\n");
 
 assertNotIncludes("extensions/grill-me-agent.ts", "./sub-agents", "不再引入 sub-agents");
 assertNotIncludes("extensions/grill-me-agent.ts", "spawnSubagent", "不再 spawn 子进程");
-assertIncludes("extensions/grill-me-agent.ts", "waitForIdleWithTimeout", "带超时等待当前代理完成后读取结果");
+assertIncludes("extensions/grill-me-agent.ts", "pollFor", "轮询等待当前代理产物后读取结果");
 assertIncludes("extensions/grill-me-agent.ts", "GRILL_ANSWERS_DIRNAME = \"answers\"", "保留 answers 子目录");
 assertIncludes("extensions/grill-me-agent.ts", "GRILL_QUESTIONS_DIRNAME = \"questions\"", "保留 questions 子目录");
 
@@ -122,7 +122,7 @@ const reviewSkill = fs.readFileSync(path.resolve(ROOT, "skills/review-html/SKILL
 assertIncludes("skills/review-html/SKILL.md", ".pi-dev-output/pi-review/html/", "review-html 仍写入 pi-review/html/");
 
 const devPrompts = fs.readFileSync(path.resolve(ROOT, "extensions/dev-prompts.ts"), "utf-8");
-assertIncludes("extensions/dev-prompts.ts", ".pi-dev-output/pi-review/html", "自动审查仍查找 pi-review/html/");
+assertIncludes("extensions/dev-prompts.ts", "\"pi-review\"", "自动审查仍查找 pi-review/ 输出目录");
 assertIncludes("extensions/session-utils.ts", "detectProjectDefaults", "项目探测（语言/测试/lint/pre-commit/CI）");
 assertIncludes("extensions/session-utils.ts", "defaultAcceptance", "生成默认验收标准");
 assertIncludes("extensions/dev-prompts.ts", "applyDefaults", "未填字段注入默认值");
