@@ -3,7 +3,7 @@
  *
  * Registers /dev-* commands that interactively collect missing context for
  * high-quality prompt templates (from ai提示词优化.md) and send the assembled
- * prompt directly to the main agent.
+ * prompt directly to the current agent.
  *
  * Commands:
  *   /dev-feat       - New feature / creative generation
@@ -21,12 +21,15 @@
  * Usage: type /dev-<type> and follow the wizard.
  * Leave a field empty (Enter) to skip its section.
  * Press Esc to cancel the entire wizard.
+ *
+ * Review detection: inputs mentioning review/审查 + code/diff are automatically
+ * handled by the review-html skill, running in the current agent.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { runGrillPhase, runPRDPhase, saveAnswerFile, recoverFromBackup, type GrillOptions } from "./grill-me-agent";
-import { discoverAgents } from "./sub-agents";
-import { runWorkflow, loadCheckpointFromFile, type WorkflowStepDef } from "./workflow-engine";
 import { uiSelect, uiConfirm, uiInput, BACK_MARKER } from "./ui-helpers";
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -51,6 +54,62 @@ function isEmpty(val: string | undefined): boolean {
 function wrap(val: string | undefined, fallback = "..."): string {
 	if (isEmpty(val)) return fallback;
 	return val!.trim();
+}
+
+// ── Review helper ────────────────────────────────────────────
+
+/** Find the newest HTML review file in .pi-dev-output/pi-review/html/. */
+function findNewestReviewHtml(cwd: string): string {
+	const candidates = [
+		path.join(cwd, ".pi-dev-output", "pi-review", "html"),
+		path.join(cwd, "pi-review"),
+		path.join(cwd, ".pi-dev-output", "pi-review"),
+	];
+
+	for (const reviewDir of candidates) {
+		try {
+			if (fs.existsSync(reviewDir)) {
+				const files = fs.readdirSync(reviewDir)
+					.filter(f => f.endsWith(".html"))
+					.map(f => ({
+						name: f,
+						mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
+					}))
+					.sort((a, b) => b.mtime - a.mtime);
+				if (files.length > 0) {
+					const rel = path.relative(cwd, reviewDir);
+					return rel + "/" + files[0].name;
+				}
+			}
+		} catch {
+			// ignore fs errors
+		}
+	}
+
+	return "";
+}
+
+/** Run a code review in the current agent and report the result. */
+async function runReview(task: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<string | undefined> {
+	const startTime = Date.now();
+	ctx.ui.notify("🤖 正在运行代码审查，请稍候...", "info");
+
+	pi.sendUserMessage(`/skill:review-html\n\n${task}`, { deliverAs: "followUp" });
+	try {
+		await ctx.waitForIdle(10 * 60_000);
+	} catch {
+		// Agent may have failed; check for output anyway
+	}
+
+	const dur = ((Date.now() - startTime) / 1000).toFixed(1);
+	const filePath = findNewestReviewHtml(ctx.cwd);
+
+	if (filePath) {
+		ctx.ui.notify(`📄 审查报告已生成: ${filePath} (${dur}s)`, "success");
+	} else {
+		ctx.ui.notify(`✅ 代码审查完成 (${dur}s)`, "info");
+	}
+	return filePath;
 }
 
 // ── Template Assemblers ──────────────────────────────────────
@@ -277,7 +336,7 @@ function assembleStylePrompt(f: StyleFields): string {
 	const lines: string[] = [];
 	lines.push(`[style] 将以下内容调整为 ${wrap(f.targetStyle)}`);
 	lines.push("");
-	lines.push("**角色**：你是一个代码风格专家。");
+	lines.push("**角色**：你是一位代码风格专家。");
 	lines.push(`**原文**：${wrap(f.description, "（见当前上下文）")}`);
 	lines.push("**任务**：");
 	lines.push("1. 保持原意和信息完整，仅改变表达风格/代码格式。");
@@ -356,365 +415,10 @@ function assembleComparePrompt(f: CompareFields): string {
 	return lines.join("\n");
 }
 
-// ── Specialized Agent Definitions (loaded from agents/grill/ directory) ──
-
-const _fixGrillAgent = discoverAgents().find(a => a.name === "dev-fix-grill-agent")!;
-const _docGrillAgent = discoverAgents().find(a => a.name === "dev-doc-grill-agent")!;
-const _refactorGrillAgent = discoverAgents().find(a => a.name === "dev-refactor-grill-agent")!;
-const _testGrillAgent = discoverAgents().find(a => a.name === "dev-test-grill-agent")!;
-const _perfGrillAgent = discoverAgents().find(a => a.name === "dev-perf-grill-agent")!;
-
-// ── Workflow configurations ──────────────────────────────────
-
-const FEAT_WORKFLOW_STEPS: WorkflowStepDef[] = [
-	{
-		id: "planner",
-		label: "📋 生成实施计划",
-		type: "auto",
-		agentName: "planner",
-		timeoutMs: 900_000,
-	},
-	{
-		id: "worker-reviewer",
-		label: "🔧 实施代码 → 审查",
-		type: "loop-group",
-		loopAgentName: "worker",
-		reviewAgentName: "reviewer",
-		maxLoops: 3,
-		timeoutMs: 1_800_000,
-		reviewTimeoutMs: 900_000,
-	},
-	{
-		id: "trimmer-reviewer",
-		label: "✂️ 精简代码 → 审查",
-		type: "loop-group",
-		loopAgentName: "trimmer",
-		reviewAgentName: "reviewer",
-		maxLoops: 3,
-		timeoutMs: 1_200_000,
-		reviewTimeoutMs: 900_000,
-	},
-	{
-		id: "docWriter",
-		label: "📝 更新文档",
-		type: "confirm",
-		agentName: "docWriter",
-		timeoutMs: 600_000,
-	},
-];
-
-const FIX_WORKFLOW_STEPS: WorkflowStepDef[] = [
-	{
-		id: "planner",
-		label: "📋 分析根因并制定修复计划",
-		type: "auto",
-		agentName: "planner",
-		timeoutMs: 900_000,
-	},
-	{
-		id: "worker-reviewer",
-		label: "🔧 修复代码 → 审查",
-		type: "loop-group",
-		loopAgentName: "worker",
-		reviewAgentName: "reviewer",
-		maxLoops: 3,
-		timeoutMs: 1_800_000,
-		reviewTimeoutMs: 900_000,
-	},
-	{
-		id: "docWriter",
-		label: "📝 更新文档",
-		type: "confirm",
-		agentName: "docWriter",
-		timeoutMs: 600_000,
-	},
-];
-
-const REFACTOR_WORKFLOW_STEPS: WorkflowStepDef[] = [
-	{
-		id: "planner",
-		label: "📋 分析重构计划",
-		type: "auto",
-		agentName: "planner",
-		timeoutMs: 900_000,
-	},
-	{
-		id: "worker-reviewer",
-		label: "🔧 重构代码 → 审查",
-		type: "loop-group",
-		loopAgentName: "worker",
-		reviewAgentName: "reviewer",
-		maxLoops: 3,
-		timeoutMs: 1_800_000,
-		reviewTimeoutMs: 900_000,
-	},
-	{
-		id: "trimmer-reviewer",
-		label: "✂️ 精简代码 → 审查",
-		type: "loop-group",
-		loopAgentName: "trimmer",
-		reviewAgentName: "reviewer",
-		maxLoops: 3,
-		timeoutMs: 1_200_000,
-		reviewTimeoutMs: 900_000,
-	},
-];
-
-const PERF_WORKFLOW_STEPS: WorkflowStepDef[] = [
-	{
-		id: "planner",
-		label: "📋 分析性能问题并制定优化计划",
-		type: "auto",
-		agentName: "planner",
-		timeoutMs: 900_000,
-	},
-	{
-		id: "worker-reviewer",
-		label: "⚡ 优化代码 → 审查",
-		type: "loop-group",
-		loopAgentName: "worker",
-		reviewAgentName: "reviewer",
-		maxLoops: 3,
-		timeoutMs: 1_800_000,
-		reviewTimeoutMs: 900_000,
-	},
-];
-
-const TEST_WORKFLOW_STEPS: WorkflowStepDef[] = [
-	{
-		id: "planner",
-		label: "📋 分析测试计划",
-		type: "auto",
-		agentName: "planner",
-		timeoutMs: 900_000,
-	},
-	{
-		id: "worker-reviewer",
-		label: "🧪 编写测试 → 审查",
-		type: "loop-group",
-		loopAgentName: "worker",
-		reviewAgentName: "reviewer",
-		maxLoops: 3,
-		timeoutMs: 1_800_000,
-		reviewTimeoutMs: 900_000,
-	},
-];
-
-const DOC_WORKFLOW_STEPS: WorkflowStepDef[] = [
-	{
-		id: "planner",
-		label: "📋 分析文档需求",
-		type: "auto",
-		agentName: "planner",
-		timeoutMs: 900_000,
-	},
-	{
-		id: "docWriter",
-		label: "📝 撰写文档",
-		type: "auto",
-		agentName: "docWriter",
-		timeoutMs: 600_000,
-	},
-];
-
-const STYLE_WORKFLOW_STEPS: WorkflowStepDef[] = [
-	{
-		id: "trimmer-reviewer",
-		label: "✂️ 风格调整 → 审查",
-		type: "loop-group",
-		loopAgentName: "trimmer",
-		reviewAgentName: "reviewer",
-		maxLoops: 2,
-		timeoutMs: 1_200_000,
-		reviewTimeoutMs: 900_000,
-	},
-];
-
-const SECURITY_WORKFLOW_STEPS: WorkflowStepDef[] = [
-	{
-		id: "reviewer",
-		label: "🔒 安全审查",
-		type: "auto",
-		agentName: "reviewer",
-		timeoutMs: 900_000,
-	},
-];
-
 // ── Command runner ───────────────────────────────────────────
 
-/** Format workflow steps into a readable list. */
-function formatWorkflowSteps(steps: WorkflowStepDef[]): string {
-	return steps.map((s, i) => `${i + 1}. ${s.label}`).join("\n");
-}
-
 /**
- * Prompt user to choose workflow mode and optionally customize sub-agent chain.
- *
- * Returns true if workflow was started and handled (caller should return immediately).
- * Returns false if caller should fall through to direct prompt sending.
- */
-async function promptWorkflowDecision(
-	ctx: ExtensionCommandContext,
-	pi: ExtensionAPI,
-	finalPrompt: string,
-	defaultSteps: WorkflowStepDef[],
-): Promise<boolean> {
-	if (!defaultSteps || defaultSteps.length === 0) return false;
-
-	const choice = await uiSelect(
-		ctx,
-		"🚀 选择工作流模式",
-		[
-			"1. 使用默认链式子代理（推荐）",
-			"2. 自定义链式子代理",
-			"3. 退出工作流（直接发送 prompt 给主代理）",
-		],
-	);
-
-	if (!choice || choice.startsWith("3")) {
-		return false;
-	}
-
-	if (choice.startsWith("1")) {
-		saveAnswerFile(ctx.cwd, finalPrompt);
-		await runWorkflow(ctx, pi, finalPrompt, { steps: defaultSteps }, "快速链式");
-		return true;
-	}
-
-	// ── Custom mode: let user pick steps and set timeouts (with back support) ──
-	const customSteps: WorkflowStepDef[] = [];
-	let stepIdx = 0;
-	while (stepIdx >= 0 && stepIdx < defaultSteps.length) {
-		const step = defaultSteps[stepIdx]!;
-
-		// If this step was already added, show current config, else show default
-		const existingStep = customSteps.find(cs => cs.id === step.id);
-		const include = await uiConfirm(
-			ctx,
-			`📌 ${step.label}${existingStep ? ' (已添加)' : ''}`,
-			`类型: ${step.type}\n默认超时: ${(step.timeoutMs / 60000).toFixed(0)} 分钟`,
-			stepIdx > 0, // backable only after first step
-		);
-		if (include === "back") {
-			// Go back: remove the last added step
-			if (customSteps.length > 0) {
-				customSteps.pop();
-				stepIdx--;
-				continue;
-			}
-			return false; // nothing to go back to
-		}
-		if (include === undefined) return false; // Esc
-
-		if (!include) {
-			stepIdx++;
-			continue; // skip this step
-		}
-
-		const existingTimeout = existingStep?.timeoutMs;
-		const timeoutStr = await uiInput(
-			ctx,
-			`⏱️ ${step.label} - 超时时间(分钟)`,
-			existingTimeout
-				? `当前: ${(existingTimeout / 60000).toFixed(0)} 分钟，留空保持`
-				: `留空保持默认 (${(step.timeoutMs / 60000).toFixed(0)} 分钟)`,
-		);
-		if (timeoutStr === undefined) { stepIdx++; continue; } // Esc on input = skip
-
-		if (existingStep) {
-			// Update existing step's timeout
-			existingStep.timeoutMs = timeoutStr ? parseInt(timeoutStr, 10) * 60 * 1000 || step.timeoutMs : step.timeoutMs;
-		} else {
-			customSteps.push({
-				...step,
-				timeoutMs: timeoutStr ? parseInt(timeoutStr, 10) * 60 * 1000 || step.timeoutMs : step.timeoutMs,
-			});
-		}
-		stepIdx++;
-	}
-
-	if (customSteps.length === 0) {
-		return false;
-	}
-
-	saveAnswerFile(ctx.cwd, finalPrompt);
-	await runWorkflow(ctx, pi, finalPrompt, { steps: customSteps }, "自定义");
-	return true;
-}
-
-async function runWizardWithGrill(
-	ctx: ExtensionCommandContext,
-	pi: ExtensionAPI,
-	type: string,
-	label: string,
-	questions: Array<{ label: string; placeholder: string; key: string }>,
-	assembler: (answers: Record<string, string>) => string,
-	grillOptions?: GrillOptions,
-	workflowConfig?: { steps: WorkflowStepDef[] },
-): Promise<void> {
-	const answers: Record<string, string> = {};
-	let idx = 0;
-
-	while (idx >= 0 && idx < questions.length) {
-		const q = questions[idx]!;
-		const existingVal = answers[q.key];
-		const placeholder = existingVal
-			? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
-			: q.placeholder;
-		const val = await ask(ctx, q.label, placeholder, true, existingVal || "");
-		if (val === undefined) {
-			return;
-		}
-		if (val === BACK_MARKER) {
-			if (idx > 0) {
-				idx--;
-				continue;
-			}
-			return;
-		}
-		answers[q.key] = val;
-		idx++;
-	}
-
-	const basePrompt = assembler(answers);
-
-	// ── Grill phase (if agentDef provided) ────────────────────
-	let finalPrompt = basePrompt;
-	if (grillOptions) {
-		const grillResult = await runGrillPhase(basePrompt, ctx, {
-			agentDef: grillOptions.agentDef,
-			title: grillOptions.title,
-			description: grillOptions.description,
-			questionTitle: grillOptions.questionTitle,
-			loaderLabel: grillOptions.loaderLabel,
-		});
-		if (grillResult.cancelled) {
-			return;
-		}
-		finalPrompt = grillResult.enhancedPrompt;
-	}
-
-	// ── Workflow phase ───────────────────────────
-	if (workflowConfig && workflowConfig.steps.length > 0) {
-		const handled = await promptWorkflowDecision(ctx, pi, finalPrompt, workflowConfig.steps);
-		if (handled) return;
-	}
-
-	// ── Guard & persist before sending ──────────────────────
-	if (!finalPrompt) {
-		const recovered = recoverFromBackup(ctx.cwd);
-		if (recovered) {
-			finalPrompt = recovered;
-		} else {
-			return;
-		}
-	}
-	const answerPath = saveAnswerFile(ctx.cwd, finalPrompt);
-	pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
-}
-
-/**
- * Run a wizard: ask questions, assemble prompt, send to agent.
+ * Run a wizard: ask questions, assemble prompt, persist it, and send to the current agent.
  */
 async function runWizard(
 	ctx: ExtensionCommandContext,
@@ -723,7 +427,6 @@ async function runWizard(
 	label: string,
 	questions: Array<{ label: string; placeholder: string; key: string }>,
 	assembler: (answers: Record<string, string>) => string,
-	workflowConfig?: { steps: WorkflowStepDef[] },
 ): Promise<void> {
 	const answers: Record<string, string> = {};
 	let idx = 0;
@@ -754,17 +457,78 @@ async function runWizard(
 
 	const prompt = assembler(answers);
 
-	// ── Workflow phase ───────────────────────────
-	if (workflowConfig && workflowConfig.steps.length > 0) {
-		const handled = await promptWorkflowDecision(ctx, pi, prompt, workflowConfig.steps);
-		if (handled) return;
+	// ── Guard & persist before sending ──────────────────────
+	const finalPrompt = prompt || recoverFromBackup(ctx.cwd) || "";
+	if (!finalPrompt) return;
+
+	saveAnswerFile(ctx.cwd, finalPrompt);
+	pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
+}
+
+/**
+ * Run a wizard with an optional Grill phase, then send to the current agent.
+ */
+async function runWizardWithGrill(
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+	type: string,
+	label: string,
+	questions: Array<{ label: string; placeholder: string; key: string }>,
+	assembler: (answers: Record<string, string>) => string,
+	grillOptions?: GrillOptions,
+): Promise<void> {
+	const answers: Record<string, string> = {};
+	let idx = 0;
+
+	while (idx >= 0 && idx < questions.length) {
+		const q = questions[idx]!;
+		const existingVal = answers[q.key];
+		const placeholder = existingVal
+			? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
+			: q.placeholder;
+		const val = await ask(ctx, q.label, placeholder, true, existingVal || "");
+		if (val === undefined) {
+			return;
+		}
+		if (val === BACK_MARKER) {
+			if (idx > 0) {
+				idx--;
+				continue;
+			}
+			return;
+		}
+		answers[q.key] = val;
+		idx++;
 	}
 
-	// Persist prompt before sending
-	saveAnswerFile(ctx.cwd, prompt);
+	const basePrompt = assembler(answers);
 
-	// Send the assembled prompt to the main agent
-	pi.sendUserMessage(prompt, { deliverAs: "followUp" });
+	// ── Grill phase (current agent) ─────────────────────────
+	let finalPrompt = basePrompt;
+	if (grillOptions) {
+		const grillResult = await runGrillPhase(basePrompt, ctx, pi, {
+			title: grillOptions.title,
+			description: grillOptions.description,
+			questionTitle: grillOptions.questionTitle,
+			loaderLabel: grillOptions.loaderLabel,
+		});
+		if (grillResult.cancelled) {
+			return;
+		}
+		finalPrompt = grillResult.enhancedPrompt;
+	}
+
+	// ── Guard & persist before sending ──────────────────────
+	if (!finalPrompt) {
+		const recovered = recoverFromBackup(ctx.cwd);
+		if (recovered) {
+			finalPrompt = recovered;
+		} else {
+			return;
+		}
+	}
+	saveAnswerFile(ctx.cwd, finalPrompt);
+	pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
 }
 
 // ── Questions for each command ────────────────────────────────
@@ -855,9 +619,67 @@ const COMPARE_QUESTIONS = [
 // ── Extension ────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	// ── Auto review detection (runs in the current agent) ─────────
+	pi.on("input", async (event, ctx) => {
+		if (!ctx.hasUI) return { action: "continue" };
+
+		const text = event.text.trim().toLowerCase();
+
+		// Detect review-html skill invocation or explicit review request.
+		const isReviewSkill = text.startsWith("/skill:review-html");
+		const hasReviewIntent = text.includes("review") ||
+			text.includes("审查") || text.includes("审阅") || text.includes("review-html");
+		const hasCodeTarget = text.includes("code") || text.includes("代码") ||
+			text.includes("diff") || text.includes("commit") ||
+			text.includes("html") || text.includes("report") || text.includes("报告") ||
+			text.includes("本次改动") || text.includes("这次改动");
+		const isReviewRequest = !isReviewSkill && hasReviewIntent && hasCodeTarget;
+
+		if (!isReviewSkill && !isReviewRequest) return { action: "continue" };
+
+		// ── Skill invocation: run review directly ─────────────────
+		if (isReviewSkill) {
+			await runReview(event.text, ctx, pi);
+			return { action: "handled" };
+		}
+
+		// ── Review intent: let the user choose ────────────────────
+		const mode = await uiSelect(
+			ctx,
+			"🔍 检测到审查意图",
+			[
+				"1. 后台审查(非阻塞,异步通知)",
+				"2. 仅审查(阻塞,等待结果)",
+				"3. 不是审查(放行给主代理)",
+			],
+		);
+
+		if (!mode || mode.startsWith("3")) {
+			return { action: "continue" };
+		}
+
+		const isAsync = mode.startsWith("1");
+
+		if (isAsync) {
+			ctx.ui.notify("🔍 已在后台启动代码审查，完成后会在此对话中通知您。", "info");
+			// Run in the background without blocking the main conversation.
+			(async () => {
+				try {
+					await runReview(event.text, ctx, pi);
+				} catch (err) {
+					console.error("[dev-prompts] Background review failed:", err);
+				}
+			})();
+		} else {
+			await runReview(event.text, ctx, pi);
+		}
+
+		return { action: "handled" };
+	});
+
 	// ── /dev-feat ──────────────────────────────────────────────
 	pi.registerCommand("dev-feat", {
-		description: "(prompt wizard) 新功能/创意生成 — 支持设计方案追问完善 (Grill) + 自动化工作流",
+		description: "(prompt wizard) 新功能/创意生成 — 支持设计方案追问完善 (Grill)",
 		handler: async (_args, ctx) => {
 			const answers: Record<string, string> = {};
 			let featIdx = 0;
@@ -884,27 +706,30 @@ export default function (pi: ExtensionAPI) {
 
 			const basePrompt = assembleFeatPrompt(answers as FeatFields);
 
-			const grillResult = await runGrillPhase(basePrompt, ctx);
+			const grillResult = await runGrillPhase(basePrompt, ctx, pi, {
+				title: "🔍 设计方案追问完善",
+				description: "AI 会通过系统性追问帮你打磨方案：从术语精确化到边界条件验证，确保架构决策的每个分支都经过推敲。",
+				questionTitle: "设计方案追问完善",
+				loaderLabel: "🧠 AI 正在分析代码并生成追问问题...",
+			});
 			if (grillResult.cancelled) {
 				return;
 			}
-			const finalPrompt = grillResult.enhancedPrompt;
+			const finalPrompt = grillResult.enhancedPrompt || basePrompt;
 
-			if (FEAT_WORKFLOW_STEPS.length > 0) {
-				const handled = await promptWorkflowDecision(ctx, pi, finalPrompt, FEAT_WORKFLOW_STEPS);
-				if (handled) return;
-			}
+			// ── PRD phase (current agent) ──────────────────────────
+			await runPRDPhase(finalPrompt, (answers as FeatFields).module || "feature", pi, ctx);
 
 			if (!finalPrompt) {
 				const recovered = recoverFromBackup(ctx.cwd);
 				if (recovered) {
-					const answerPath = saveAnswerFile(ctx.cwd, recovered);
+					saveAnswerFile(ctx.cwd, recovered);
 					pi.sendUserMessage(recovered, { deliverAs: "followUp" });
 					return;
 				}
 				return;
 			}
-			const answerPath = saveAnswerFile(ctx.cwd, finalPrompt);
+			saveAnswerFile(ctx.cwd, finalPrompt);
 			pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
 		},
 	});
@@ -917,13 +742,11 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "fix", "问题排查/错误修正",
 				FIX_QUESTIONS, assembleFixPrompt,
 				{
-					agentDef: _fixGrillAgent,
 					title: "🐛 Bug 根因追问",
-					description: "AI 会通过一步步追问帮你精准定位根因：从复现条件到根本原因推理，再到修复方案验证和回归风险评估。",
+					description: "AI 会通过系统性追问帮你精准定位根因：从复现条件到根本原因推理，再到修复方案验证和回归风险评估。",
 					questionTitle: "Bug 根因分析",
 					loaderLabel: "🧠 AI 正在分析代码并生成根因追问问题...",
 				},
-				{ steps: FIX_WORKFLOW_STEPS },
 			);
 		},
 	});
@@ -936,13 +759,11 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "doc", "文档生成/总结",
 				DOC_QUESTIONS, assembleDocPrompt,
 				{
-					agentDef: _docGrillAgent,
 					title: "📄 文档大纲追问完善",
 					description: "AI 会通过追问帮你完善文档大纲：从受众定位到结构安排，确认术语一致性和示例覆盖范围。",
 					questionTitle: "文档大纲追问完善",
 					loaderLabel: "🧠 AI 正在分析并生成文档大纲追问问题...",
 				},
-				{ steps: DOC_WORKFLOW_STEPS },
 			);
 		},
 	});
@@ -955,13 +776,11 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "refactor", "重构/优化",
 				REFACTOR_QUESTIONS, assembleRefactorPrompt,
 				{
-					agentDef: _refactorGrillAgent,
 					title: "🔧 重构方案追问",
 					description: "AI 会通过追问帮你识别隐藏耦合风险：从模块边界到 API 兼容性，验证行为保持和迁移路径安全性。",
 					questionTitle: "重构方案追问",
 					loaderLabel: "🧠 AI 正在分析代码并生成重构追问问题...",
 				},
-				{ steps: REFACTOR_WORKFLOW_STEPS },
 			);
 		},
 	});
@@ -974,13 +793,11 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "test", "测试用例/评估",
 				TEST_QUESTIONS, assembleTestPrompt,
 				{
-					agentDef: _testGrillAgent,
 					title: "🧪 测试策略追问",
 					description: "AI 会通过追问帮你发现测试缺口：从覆盖维度到边界条件，验证模拟策略和测试隔离是否到位。",
 					questionTitle: "测试策略追问",
 					loaderLabel: "🧠 AI 正在分析并生成测试追问问题...",
 				},
-				{ steps: TEST_WORKFLOW_STEPS },
 			);
 		},
 	});
@@ -1001,13 +818,11 @@ export default function (pi: ExtensionAPI) {
 				ctx, pi, "perf", "性能优化",
 				PERF_QUESTIONS, assemblePerfPrompt,
 				{
-					agentDef: _perfGrillAgent,
 					title: "⚡ 性能优化方案追问",
 					description: "AI 会通过追问帮你验证瓶颈判断和优化方向：从基准测试方法到潜在回归风险，确保方案合理性。",
 					questionTitle: "性能优化方案追问",
 					loaderLabel: "🧠 AI 正在分析并生成性能优化追问问题...",
 				},
-				{ steps: PERF_WORKFLOW_STEPS },
 			);
 		},
 	});
@@ -1016,7 +831,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("dev-style", {
 		description: "(prompt wizard) 风格/格式调整 — 交互填写后发送优化提示词给主代理",
 		handler: async (_args, ctx) => {
-			await runWizard(ctx, pi, "style", "风格/格式调整", STYLE_QUESTIONS, assembleStylePrompt, { steps: STYLE_WORKFLOW_STEPS });
+			await runWizard(ctx, pi, "style", "风格/格式调整", STYLE_QUESTIONS, assembleStylePrompt);
 		},
 	});
 
@@ -1024,7 +839,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("dev-security", {
 		description: "(prompt wizard) 安全审查 — 交互填写后发送优化提示词给主代理",
 		handler: async (_args, ctx) => {
-			await runWizard(ctx, pi, "security", "安全审查", SECURITY_QUESTIONS, assembleSecurityPrompt, { steps: SECURITY_WORKFLOW_STEPS });
+			await runWizard(ctx, pi, "security", "安全审查", SECURITY_QUESTIONS, assembleSecurityPrompt);
 		},
 	});
 
@@ -1041,18 +856,6 @@ export default function (pi: ExtensionAPI) {
 		description: "(prompt wizard) 对比评估 — 交互填写后发送优化提示词给主代理",
 		handler: async (_args, ctx) => {
 			await runWizard(ctx, pi, "compare", "对比评估", COMPARE_QUESTIONS, assembleComparePrompt);
-		},
-	});
-
-	// ── /dev-workflow-continue — 恢复中断的工作流 ─────────────
-	pi.registerCommand("dev-workflow-continue", {
-		description: "恢复上次中断的自动化工作流（从 checkpoint 继续）",
-		handler: async (_args, ctx) => {
-			const cp = loadCheckpointFromFile(ctx.cwd);
-			if (!cp) {
-				return;
-			}
-			await runWorkflow(ctx, pi, cp.prompt, { steps: FEAT_WORKFLOW_STEPS }, "恢复");
 		},
 	});
 }
