@@ -1,224 +1,128 @@
 /**
  * Git Commands Extension
  *
- * Registers three commands that delegate to git-sub-agent:
+ * Registers three commands that run git directly through pi's built-in executor:
  *   /git-commit [message]       - Stage all changes and commit
  *   /git-push                   - Push commits to remote
  *   /git-commit-push [message]  - Stage, commit, and push in one go
  *
- * Associated extension: sub-agents.ts (provides spawnSubagent infrastructure)
- *
- * Place in .pi/extensions/ or ~/.pi/agent/extensions/ for auto-discovery.
+ * No sub-process is spawned, so results appear in the current session context.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { discoverAgents, spawnSubagent, extractFinalOutput, type AgentDef } from "./sub-agents";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { uiInput } from "./ui-helpers";
+import { getLastAssistantTextAfter } from "./grill-me-agent";
 
 // ── Helpers ──────────────────────────────────────────────────
 
-function getAgent(
-	ctx: { ui: { notify: (msg: string, type: string) => void } },
-	agent: AgentDef | undefined,
-	name: string,
-): AgentDef | null {
-	if (!agent) {
-		ctx.ui.notify(`❌ ${name} not found (check agents/${name}.md)`, "error");
-		return null;
-	}
-	return agent;
-}
-
-/** Parse git-agent structured output into a clean summary. */
-interface GitSummary {
-	status: "success" | "fail" | "unknown";
-	summary: string;
-	details: string[];
-}
-
-function parseGitOutput(output: string): GitSummary {
-	const result: GitSummary = { status: "unknown", summary: "", details: [] };
-
-	// Parse <status>...</status>
-	const statusMatch = output.match(/<status>([^<]*)<\/status>/);
-	if (statusMatch) {
-		const s = statusMatch[1].trim();
-		if (s.includes("✅") || s.includes("✔")) result.status = "success";
-		else if (s.includes("❌") || s.includes("✖")) result.status = "fail";
+/** Ask the current agent to generate a Conventional Commits message from the diff. */
+async function generateCommitMessage(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<string> {
+	let diffSummary = "";
+	try {
+		const diffResult = await pi.exec("git", ["diff", "--stat"], { cwd: ctx.cwd, timeout: 30_000, timeoutKill: 5_000 });
+		diffSummary = diffResult.stdout?.trim() || diffResult.stderr?.trim() || "";
+	} catch {
+		// No repo, no changes, or executor unavailable
 	}
 
-	// Parse <summary>...</summary>
-	// Anchor to start of line (^ with m flag) to avoid matching a nested
-	// <summary> tag inside <details> content before the real top-level summary.
-	const summaryMatch = output.match(/^<summary>([\s\S]*?)<\/summary>/m);
-	if (summaryMatch) result.summary = summaryMatch[1].trim();
-
-	// Parse <details>...</details> → extract each line
-	// Anchor to start of line to avoid matching nested <details> inside content.
-	const detailsMatch = output.match(/^<details>([\s\S]*?)<\/details>/m);
-	if (detailsMatch) {
-		const lines = detailsMatch[1]
-			.split("\n")
-			.map((l) => l.replace(/^[-*]\s*/, "").trim())
-			.filter(Boolean);
-		result.details = lines;
+	if (!diffSummary) {
+		return "chore: 自动提交变更";
 	}
 
-	// Fallback: if no structured format, use raw lines
-	if (!statusMatch && !summaryMatch) {
-		const lines = output.split("\n").filter((l) => l.trim());
-		result.summary = lines[0] || "";
-		result.details = lines.slice(1).map((l) => l.replace(/^[-*]\s*/, "").trim()).filter(Boolean);
-		// Infer status from content
-		if (output.includes("✅") || output.includes("success") || output.includes("完成")) {
-			result.status = "success";
-		} else if (output.includes("❌") || output.includes("fail") || output.includes("失败")) {
-			result.status = "fail";
-		}
+	const task = [
+		"请根据以下 git diff 摘要，生成一条 Conventional Commits 格式的中文提交消息。",
+		"只输出一行消息，不要加任何解释、引号或前缀。",
+		"",
+		diffSummary,
+	].join("\n");
+
+	const sentAt = Date.now();
+	pi.sendUserMessage(task, { deliverAs: "followUp" });
+	try {
+		await ctx.waitForIdle(60_000);
+	} catch {
+		// Agent may have failed; fall back to a generic message
 	}
 
-	return result;
+	let text = getLastAssistantTextAfter(ctx, sentAt);
+	text = text.trim().split("\n")[0].slice(0, 120);
+	return text || "chore: 自动提交变更";
 }
 
-/** Enrich a detail line with relevant emoji icons. */
-function iconify(line: string): string {
-	const lc = line.toLowerCase();
-	if (lc.startsWith("commit")) return `📝 ${line}`;
-	if (lc.startsWith("push"))   return `📤 ${line}`;
-	if (lc.includes("file") || lc.includes("文件")) return `📁 ${line}`;
-	if (lc.startsWith("branch") || lc.includes("branch")) return `🌿 ${line}`;
-	if (lc.startsWith("tag") || lc.includes("tag")) return `🏷️ ${line}`;
-	return `  ${line}`; // indent others
-}
-
-async function runSubAgent(
-	agent: AgentDef,
-	task: string,
+/** Run a git command through pi's executor and report the outcome. */
+async function runGitCommand(
+	pi: ExtensionAPI,
 	ctx: {
 		cwd: string;
-		signal?: AbortSignal;
-		ui: {
-			setStatus: (key: string, status: string | undefined) => void;
-			notify: (msg: string, type: string) => void;
-		};
+		ui: { notify: (msg: string, type: string) => void };
 	},
-): Promise<void> {
-	const startTime = Date.now();
-	ctx.ui.setStatus("subagent", "🤖 git-sub-agent working...");
-
+	args: string[],
+	action: string,
+): Promise<boolean> {
 	try {
-		const result = await spawnSubagent(
-			agent,
-			task,
-			ctx.cwd,
-			ctx.signal,
-			undefined, // use agent's default timeout
-			(progress) => {
-				ctx.ui.setStatus("subagent", progress.slice(0, 50));
-			},
-		);
-		const dur = ((Date.now() - startTime) / 1000).toFixed(1);
-
-		// Extract output with fallback to raw stdout
-		let output = extractFinalOutput(result.output);
-		if (!output && result.output.trim()) {
-			const lines = result.output.split("\n").filter((l) => {
-				const t = l.trim();
-				return t && !t.startsWith("{") && !t.startsWith("[");
-			});
-			if (lines.length > 0) {
-				output = lines.join("\n").trim();
-			}
+		const result = await pi.exec("git", args, { cwd: ctx.cwd, timeout: 120_000, timeoutKill: 10_000 });
+		if (result.exitCode !== 0) {
+			const detail = result.stderr?.trim() || result.stdout?.trim() || "未知错误";
+			ctx.ui.notify(`❌ ${action} 失败 (exit ${result.exitCode}): ${detail}`, "error");
+			return false;
 		}
-
-		ctx.ui.setStatus("subagent", undefined);
-
-		if (output) {
-			const parsed = parseGitOutput(output);
-			const statusIcon = parsed.status === "success" ? "✅" : parsed.status === "fail" ? "❌" : "ℹ️";
-			const detailText = parsed.details.length > 0 ? ` | ${parsed.details.join(" | ")}` : "";
-			const msg = `${statusIcon} ${parsed.summary || "done"} (${dur}s)${detailText}`;
-			const notifyType = parsed.status === "fail" ? "error" : "success";
-			ctx.ui.notify(msg, notifyType);
-		} else if (result.exitCode !== 0) {
-			const errMsg = result.stderr || result.output.slice(0, 300) || "未知错误";
-			ctx.ui.notify(`❌ git-sub-agent 失败 (${dur}s): ${errMsg}`, "error");
-		} else {
-			ctx.ui.notify(`✅ git-sub-agent 完成 (${dur}s)`, "success");
-		}
-	} finally {
-		ctx.ui.setStatus("subagent", undefined);
+		ctx.ui.notify(`✅ ${action} 完成`, "success");
+		return true;
+	} catch (err) {
+		ctx.ui.notify(`❌ ${action} 异常: ${err instanceof Error ? err.message : String(err)}`, "error");
+		return false;
 	}
 }
 
 // ── Extension ────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-	const agents = discoverAgents();
-	const gitAgent = agents.find((a) => a.name === "git-agent");
-
 	// ── /git-commit ────────────────────────────────────────────
 	pi.registerCommand("git-commit", {
-		description: "(sub-agent) Stage all changes and create a commit via git-sub-agent",
+		description: "Stage all changes and create a commit (leave message empty for an AI-generated Conventional Commits message)",
 		handler: async (args, ctx) => {
-			const agent = getAgent(ctx, gitAgent, "git-agent");
-			if (!agent) return;
-
 			let message = args.trim();
 			if (!message) {
 				const input = await uiInput(ctx, "Commit message", "直接回车让 AI 自动生成，或输入信息后提交...");
-				if (input === undefined) {
-					return;
-				}
+				if (input === undefined) return;
 				message = input.trim();
 			}
 
+			const addOk = await runGitCommand(pi, ctx, ["add", "-A"], "暂存所有变更");
+			if (!addOk) return;
 
-			const task = message
-				? `Stage all changes with git add -A, then commit with message: "${message}". Do NOT ask for confirmation.`
-				: `Stage all changes with git add -A, check the diff, write a Conventional Commits message, and commit. Do NOT ask for confirmation.`;
-
-			await runSubAgent(agent, task, ctx);
+			const commitMessage = message ? message : await generateCommitMessage(pi, ctx);
+			await runGitCommand(pi, ctx, ["commit", "-m", commitMessage], `提交 (${commitMessage})`);
 		},
 	});
 
 	// ── /git-push ─────────────────────────────────────────────
 	pi.registerCommand("git-push", {
-		description: "(sub-agent) Push commits to remote via git-sub-agent",
+		description: "Push commits to the remote repository",
 		handler: async (_args, ctx) => {
-			const agent = getAgent(ctx, gitAgent, "git-agent");
-			if (!agent) return;
-
-			await runSubAgent(
-				agent,
-				"Push commits to remote with git push. Do NOT ask for confirmation.",
-				ctx,
-			);
+			await runGitCommand(pi, ctx, ["push"], "推送到远程");
 		},
 	});
 
 	// ── /git-commit-push ──────────────────────────────────────
 	pi.registerCommand("git-commit-push", {
-		description: "(sub-agent) Stage, commit, and push via git-sub-agent",
+		description: "Stage, commit, and push in one go (leave message empty for an AI-generated Conventional Commits message)",
 		handler: async (args, ctx) => {
-			const agent = getAgent(ctx, gitAgent, "git-agent");
-			if (!agent) return;
-
 			let message = args.trim();
 			if (!message) {
 				const input = await uiInput(ctx, "Commit message", "直接回车让 AI 自动生成，或输入信息后提交并推送...");
-				if (input === undefined) {
-					return;
-				}
+				if (input === undefined) return;
 				message = input.trim();
 			}
 
+			const addOk = await runGitCommand(pi, ctx, ["add", "-A"], "暂存所有变更");
+			if (!addOk) return;
 
-			const task = message
-				? `Stage all changes with git add -A, commit with message: "${message}", then push. Do NOT ask for confirmation.`
-				: `Stage all changes with git add -A, check the diff, write a Conventional Commits message, commit, then push. Do NOT ask for confirmation.`;
+			const commitMessage = message ? message : await generateCommitMessage(pi, ctx);
+			const commitOk = await runGitCommand(pi, ctx, ["commit", "-m", commitMessage], `提交 (${commitMessage})`);
+			if (!commitOk) return;
 
-			await runSubAgent(agent, task, ctx);
+			await runGitCommand(pi, ctx, ["push"], "推送到远程");
 		},
 	});
 }
