@@ -30,6 +30,10 @@ function assertNotExists(rel, msg) {
 	assert(!fs.existsSync(path.resolve(ROOT, rel)), msg);
 }
 
+function assertExists(rel, msg) {
+	assert(fs.existsSync(path.resolve(ROOT, rel)), msg);
+}
+
 function assertIncludes(rel, substr, msg) {
 	const src = fs.readFileSync(path.resolve(ROOT, rel), "utf-8");
 	assert(src.includes(substr), msg);
@@ -48,6 +52,7 @@ console.log("📋 子代理基础设施\n");
 
 assertNotExists("extensions/sub-agents.ts", "extensions/sub-agents.ts 已删除");
 assertNotExists("extensions/workflow-engine.ts", "extensions/workflow-engine.ts 已删除");
+assertExists("extensions/session-utils.ts", "extensions/session-utils.ts 提供共享的等待/会话工具");
 assertNotExists("agents/", "agents/ 目录已删除");
 assertNotExists(".doc/AGENT-FRONTMATTER-REFERENCE.md", "AGENT-FRONTMATTER-REFERENCE.md 已删除");
 
@@ -62,6 +67,8 @@ assertNotIncludes("extensions/dev-prompts.ts", "./workflow-engine", "不再引�
 assertNotIncludes("extensions/dev-prompts.ts", "runWorkflow", "不再调用 runWorkflow");
 assertNotIncludes("extensions/dev-prompts.ts", "discoverAgents", "不再自动发现 agent");
 assertNotIncludes("extensions/dev-prompts.ts", "WORKFLOW_STEPS", "不再定义工作流步骤链");
+assertIncludes("extensions/dev-prompts.ts", "event.source === \"extension\"", "过滤扩展注入消息，防止递归");
+assertIncludes("extensions/dev-prompts.ts", "expandPromptTemplates: true", "skill 命令展开执行");
 assertIncludes("extensions/dev-prompts.ts", "pi.sendUserMessage(finalPrompt", "组装后的提示词直接发送给当前代理");
 assertIncludes("extensions/dev-prompts.ts", "saveAnswerFile(ctx.cwd, finalPrompt)", "保留提示词持久化");
 assertIncludes("extensions/dev-prompts.ts", "recoverFromBackup(ctx.cwd)", "保留断点恢复");
@@ -74,6 +81,7 @@ console.log("\n📋 git-commands.ts\n");
 
 assertNotIncludes("extensions/git-commands.ts", "./sub-agents", "不再引入 sub-agents");
 assertNotIncludes("extensions/git-commands.ts", "spawnSubagent", "不再 spawn 子进程");
+assertIncludes("extensions/git-commands.ts", "./session-utils", "从 session-utils 获取共享工具");
 assertIncludes("extensions/git-commands.ts", "pi.exec(\"git\"", "通过 pi.exec 直接执行 git");
 assertIncludes("extensions/git-commands.ts", "git-commit", "保留 /git-commit 命令");
 assertIncludes("extensions/git-commands.ts", "git-push", "保留 /git-push 命令");
@@ -87,7 +95,7 @@ console.log("\n📋 grill-me-agent.ts\n");
 
 assertNotIncludes("extensions/grill-me-agent.ts", "./sub-agents", "不再引入 sub-agents");
 assertNotIncludes("extensions/grill-me-agent.ts", "spawnSubagent", "不再 spawn 子进程");
-assertIncludes("extensions/grill-me-agent.ts", "ctx.waitForIdle", "等待当前代理完成后读取结果");
+assertIncludes("extensions/grill-me-agent.ts", "waitForIdleWithTimeout", "带超时等待当前代理完成后读取结果");
 assertIncludes("extensions/grill-me-agent.ts", "GRILL_ANSWERS_DIRNAME = \"answers\"", "保留 answers 子目录");
 assertIncludes("extensions/grill-me-agent.ts", "GRILL_QUESTIONS_DIRNAME = \"questions\"", "保留 questions 子目录");
 
