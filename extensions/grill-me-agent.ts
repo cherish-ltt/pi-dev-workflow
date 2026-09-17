@@ -1,21 +1,22 @@
 /**
- * grill-me-agent.ts — 设计 (Grill) 和 PRD 生成的独立管理器
+ * grill-me-agent.ts — 设计 (Grill) 和 PRD 生成的管理器（运行在当前代理中）
  *
  * 职责：
- *   1. runGrillPhase()  — 启动 sub-agent 生成评审问题，TUI 逐题呈现（选项 + 自定义输入）
- *   2. runPRDPhase()    — 启动 sub-agent 生成 PRD，保存到 .pi-dev-output/pi-prd/
+ *   1. runGrillPhase()  — 由当前代理生成评审问题，TUI 逐题呈现（选项 + 自定义输入）
+ *   2. runPRDPhase()    — 由当前代理生成 PRD，保存到 .pi-dev-output/pi-prd/
  *
- * 关键设计决策（修复 #2）：
- *   sub-agent 通过 `write` 工具将评审问题写入临时文件，主进程事后读取。
- *   不依赖从 NDJSON 响应文本中解析 JSON（多轮 tool-calling 场景不可靠）。
+ * 与旧版的区别：不再创建隔离的子代理进程，而是把追问/PRD 任务交给当前代理执行。
+ * 当前模型普遍具备 >=1M 上下文窗口，无需通过子代理隔离上下文。
+ *
+ * 关键设计：
+ *   当前代理通过 `write` 工具将结果写入临时文件，主进程事后读取。
+ *   不依赖从响应文本中解析 JSON（多轮 tool-calling 场景不可靠）。
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader, DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { spawnSubagent, extractFinalOutput, discoverAgents, type AgentDef } from "./sub-agents";
-export type { AgentDef };
 import {
 	Container,
 	SelectList,
@@ -31,7 +32,7 @@ import { uiSelect, uiConfirm, uiInput } from "./ui-helpers";
 
 // ── Types ────────────────────────────────────────────────────
 
-/** A single grill question returned by the sub-agent. */
+/** A single grill question returned by the agent. */
 export interface GrillQuestion {
 	id: number;
 	question: string;
@@ -104,7 +105,6 @@ export function saveAnswerFile(cwd: string, content: string): string {
 /**
  * Find the most recent answer backup file and read its content.
  * Returns undefined if no backup exists or read fails.
- * Now reads from pi-grill/answers/ subdirectory.
  */
 export function recoverFromBackup(cwd: string): string | undefined {
 	const dir = path.join(cwd, DEV_OUTPUT_DIR, GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME);
@@ -132,10 +132,10 @@ function generatePrdFilename(moduleSuggestion: string): string {
 	return `${safe || "feature"}-${ts}.md`;
 }
 
-// ── Sub-agent definitions ────────────────────────────────────
+// ── File-based result extraction ─────────────────────────────
 
 /**
- * Helper: build the system prompt suffix that tells the sub-agent to
+ * Helper: build the system prompt suffix that tells the agent to
  * write results to a file via the `write` tool instead of putting JSON
  * in its chat response.
  */
@@ -176,15 +176,15 @@ function writeToolPromptSuffix(outputFilePath: string): string {
 		'}',
 		"```",
 		"",
-		"### \u26a0\ufe0f CRITICAL: String escaping rules",
+		"### ⚠️ CRITICAL: String escaping rules",
 		"",
 		"Every string value (question text, option text) MUST be valid JSON-escaped:",
 		"- Double quotes inside text \u2192 \\\"",
-		"- Newlines \u2192 \\n",
-		"- Backslashes \u2192 \\\\",
-		"- Tabs \u2192 \\t",
+		"- Newlines → \\n",
+		"- Backslashes → \\\\",
+		"- Tabs → \\t",
 		"",
-		"### \u2705 Self-review before writing",
+		"### ✅ Self-review before writing",
 		"",
 		"Before calling the `write` tool, mentally validate your JSON.",
 		"Check that all strings are properly escaped and the structure matches the schema above.",
@@ -204,7 +204,7 @@ function writeToolPromptSuffix(outputFilePath: string): string {
 		'    },',
 		'    {',
 		'      "id": 2,',
-		'      "question": "\\u4ed6\\u8bf4\\u201c\\u8fd9\\u4e2a\\u4e0d\\u884c\\u201d\\uff0c\\u8be5\\u5982\\u4f55\\u5904\\u7406\\uff1f",',
+		'      "question": "\\u4ed6\\u8bf4\\u201c\\u8fd9\\u4e2a\\u4e88\\u884c\\u201d\\uff0c\\u8be5\\u5982\\u4f55\\u5904\\u7406\\uff1f",',
 		'      "options": [',
 		'        "\\u5ffd\\u7565",',
 		'        "\\u4fee\\u590d"',
@@ -219,15 +219,8 @@ function writeToolPromptSuffix(outputFilePath: string): string {
 	].join("\n");
 }
 
-// ── Default agent definitions (loaded from agents/ directory) ────
-
-const _defaultGrillAgent = discoverAgents().find(a => a.name === "dev-grill-agent")!;
-const _defaultPrdAgent = discoverAgents().find(a => a.name === "dev-prd-agent")!;
-
-// ── File-based question extraction ───────────────────────────
-
 /**
- * Try to read and parse questions from the output file that the sub-agent
+ * Try to read and parse questions from the output file that the agent
  * was instructed to write via the `write` tool.
  */
 function readQuestionsFromFile(filePath: string): GrillQuestion[] {
@@ -258,7 +251,7 @@ function readQuestionsFromFile(filePath: string): GrillQuestion[] {
 }
 
 /**
- * Parse sub-agent output into a list of GrillQuestions.
+ * Parse agent output into a list of GrillQuestions.
  * Used as fallback when the file-based approach didn't produce results.
  */
 export function parseGrillQuestions(raw: string): GrillQuestion[] {
@@ -338,13 +331,51 @@ function extractQuestionArray(raw: string): Array<{ question: string; options: s
 	}
 }
 
+/**
+ * Extract the most recent assistant message text that arrived after a given moment.
+ * Used as fallback when the agent did not write the expected file.
+ */
+export function getLastAssistantTextAfter(ctx: ExtensionCommandContext, afterMs: number): string {
+	const leafId = ctx.sessionManager.getLeafId();
+	if (!leafId) return "";
+	try {
+		const branch = ctx.sessionManager.getBranch(leafId);
+		let text = "";
+		for (const entry of branch) {
+			if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+			const ts = new Date(entry.timestamp).getTime();
+			if (ts > afterMs) {
+				text = extractMessageText(entry.message.content) || text;
+			}
+		}
+		return text;
+	} catch {
+		return "";
+	}
+}
+
+function extractMessageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.map((part) => {
+				if (typeof part === "string") return part;
+				if (part && typeof part === "object" && "type" in part && part.type === "text") {
+					return (part as { text: string }).text;
+				}
+				return "";
+			})
+			.join("\n");
+	}
+	return "";
+}
+
 // ── Grill Phase ──────────────────────────────────────────────
 
 /**
  * Options for customizing the grill phase.
  */
 export interface GrillOptions {
-	agentDef?: AgentDef;
 	title?: string;
 	description?: string;
 	questionTitle?: string;
@@ -354,7 +385,7 @@ export interface GrillOptions {
 /**
  * Run the grill phase:
  * 1. Confirm with user
- * 2. Call sub-agent → sub-agent writes questions to a file via `write` tool
+ * 2. Send task to current agent → agent writes questions to a file via `write` tool
  * 3. Read questions from the file
  * 4. Show each question as TUI SelectList + custom input option
  * 5. Collect all Q&A pairs
@@ -363,6 +394,7 @@ export interface GrillOptions {
 export async function runGrillPhase(
 	assembledPrompt: string,
 	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
 	options?: GrillOptions,
 ): Promise<GrillResult> {
 	const defaultResult: GrillResult = {
@@ -371,11 +403,10 @@ export async function runGrillPhase(
 		enhancedPrompt: assembledPrompt,
 	};
 
-	const agentDef = options?.agentDef ?? _defaultGrillAgent;
 	const confirmTitle = options?.title ?? "🔍 设计方案追问完善";
 	const confirmDesc = options?.description ?? "AI 会通过系统性追问帮你打磨方案：从术语精确化到边界条件验证，确保架构决策的每个分支都经过推敲。";
 	const qTitlePrefix = options?.questionTitle ?? "设计方案追问完善";
-	const loaderLabel = options?.loaderLabel ?? "🧠 AI 子代理正在分析代码并生成追问问题...";
+	const loaderLabel = options?.loaderLabel ?? "🧠 AI 正在分析代码并生成追问问题...";
 
 	// ── Step 1: Confirm entering grill mode ──────────────────
 	const enterGrill = await uiConfirm(ctx, confirmTitle, confirmDesc);
@@ -391,37 +422,19 @@ export async function runGrillPhase(
 		writeToolPromptSuffix(outputFilePath),
 	].join("\n\n");
 
-	// ── Step 3: Call sub-agent with BorderedLoader ───────────
-	const questions = await ctx.ui.custom<GrillQuestion[]>((tui, theme, _kb, done) => {
-		const loader = new BorderedLoader(tui, theme, loaderLabel);
-		loader.onAbort = () => done([]);
+	// ── Step 3: Ask current agent to generate questions ──────
+	const sentAt = Date.now();
+	pi.sendUserMessage(enhancedPrompt, { deliverAs: "followUp" });
+	try {
+		await ctx.waitForIdle(5 * 60_000);
+	} catch {
+		// Agent may have failed; fall back to whatever was written
+	}
 
-		spawnSubagent(
-			agentDef,
-			enhancedPrompt,
-			ctx.cwd,
-			loader.signal,
-			undefined,
-			(progress) => {
-					const inner = (loader as unknown as { loader?: { setText?: (t: string) => void } }).loader;
-					inner?.setText?.(`🧠 ${progress.slice(0, 60)}`);
-				},
-		)
-			.then((result) => {
-				let qs = readQuestionsFromFile(outputFilePath);
-				if (qs.length === 0) {
-					const output = extractFinalOutput(result.output);
-					qs = parseGrillQuestions(output);
-				}
-				done(qs);
-			})
-			.catch(() => {
-				const qs = readQuestionsFromFile(outputFilePath);
-				done(qs);
-			});
-
-		return loader;
-	});
+	let questions = readQuestionsFromFile(outputFilePath);
+	if (questions.length === 0) {
+		questions = parseGrillQuestions(getLastAssistantTextAfter(ctx, sentAt));
+	}
 
 	// ── Step 4: Retry dialog if no questions generated ──────
 	if (questions.length === 0) {
@@ -449,43 +462,42 @@ export async function runGrillPhase(
 		switch (choice) {
 			case "🔄 重新尝试生成追问问题": {
 				const retryPath = grillOutputPath(ctx.cwd);
-				const errorFeedback = parseErrorMsg
-					? [
-						"",
-						"### ⚠️ Previous attempt had JSON errors — fix them now",
-						"",
-						`The previous attempt wrote to \`${outputFilePath}\` but the JSON was invalid.`,
-						"",
-						`JSON parse error: ${parseErrorMsg}`,
-						"",
-						"Invalid file content (first 2000 chars):",
-						"```",
-						failedFileContent.slice(0, 1000),
-						"```",
-						"",
-						"Please write valid JSON to the new path below. Make sure all strings are properly JSON-escaped.",
-					].join("\n")
-					: "";
 				const retryPrompt = [
 					assembledPrompt,
 					writeToolPromptSuffix(retryPath),
-					errorFeedback,
+					parseErrorMsg
+						? [
+								"",
+								"### ⚠️ Previous attempt had JSON errors — fix them now",
+								"",
+								`The previous attempt wrote to \`${outputFilePath}\` but the JSON was invalid.`,
+								"",
+								`JSON parse error: ${parseErrorMsg}`,
+								"",
+								"Invalid file content (first 2000 chars):",
+								"```",
+								failedFileContent.slice(0, 1000),
+								"```",
+								"",
+								"Please write valid JSON to the new path below. Make sure all strings are properly JSON-escaped.",
+							].join("\n")
+						: "",
 				].filter(Boolean).join("\n\n");
-				const retryQuestions = await ctx.ui.custom<GrillQuestion[]>((tui, theme, _kb, done) => {
-					const loader = new BorderedLoader(tui, theme, loaderLabel);
-					loader.onAbort = () => done([]);
-					spawnSubagent(agentDef, retryPrompt, ctx.cwd, loader.signal, undefined)
-						.then((r) => {
-							let qs = readQuestionsFromFile(retryPath);
-							if (qs.length === 0) qs = parseGrillQuestions(extractFinalOutput(r.output));
-							done(qs);
-						})
-						.catch(() => done([]));
-					return loader;
-				});
+
+				const retrySentAt = Date.now();
+				pi.sendUserMessage(retryPrompt, { deliverAs: "followUp" });
+				try {
+					await ctx.waitForIdle(5 * 60_000);
+				} catch { /* ignore */ }
+
+				let retryQuestions = readQuestionsFromFile(retryPath);
+				if (retryQuestions.length === 0) {
+					retryQuestions = parseGrillQuestions(getLastAssistantTextAfter(ctx, retrySentAt));
+				}
 				if (retryQuestions.length === 0) {
 					return defaultResult;
 				}
+
 				// Replace questions with retry results (with back support)
 				const pairs: Array<{ question: string; answer: string }> = [];
 				let rIdx = 0;
@@ -504,7 +516,6 @@ export async function runGrillPhase(
 						}
 						return { ...defaultResult, cancelled: true, pairs };
 					}
-					// Overwrite if re-answering, otherwise append
 					if (rIdx < pairs.length) {
 						pairs[rIdx] = { question: q.question, answer };
 					} else {
@@ -561,7 +572,6 @@ export async function runGrillPhase(
 			return { ...defaultResult, cancelled: true, pairs };
 		}
 
-		// Overwrite if re-answering (back then forward), otherwise append
 		if (qIdx < pairs.length) {
 			pairs[qIdx] = { question: q.question, answer };
 		} else {
@@ -600,15 +610,6 @@ export async function runGrillPhase(
  *   - ↑↓ 选择, Enter 确认, Esc 取消全部评审
  *   - Ctrl+Shift+← 返回上一题（仅当 backable=true 且 currentIndex > 1 时生效）
  *   - 选择 "✏️ 自定义输入" 进入文本输入模式
- *
- * @param ctx - Extension command context for TUI rendering
- * @param q - The grill question to display
- * @param currentIndex - 1-based index of current question
- * @param totalCount - Total number of questions
- * @param titlePrefix - Prefix for the question title bar
- * @param backable - Whether navigating back to previous question is allowed
- * @param previousAnswer - Previous answer to pre-fill as "上次选择" marker
- * @returns Selected option text, "__BACK__" for back navigation, or null for cancel
  */
 async function showQuestionTUI(
 	ctx: ExtensionCommandContext,
@@ -631,7 +632,6 @@ async function showQuestionTUI(
 		return {
 			value: `opt-${i}`,
 			label: truncated,
-			// 完整文本由下方的预览面板展示（支持换行），description 列无法换行故移除
 		};
 	});
 
@@ -683,7 +683,6 @@ async function showQuestionTUI(
 		container.addChild(new Spacer(1));
 		container.addChild(previewText);
 
-		// 初始化预览为第一个选项
 		if (q.options.length > 0) {
 			const initialWrapped = wrapTextWithAnsi(q.options[0], previewWidth);
 			previewText.setText(
@@ -718,7 +717,6 @@ async function showQuestionTUI(
 			render: (w) => container.render(w),
 			invalidate: () => container.invalidate(),
 			handleInput: (data) => {
-				// Ctrl+Shift+← → 返回上一题（SelectList 不处理该键，需自行拦截）
 				if (backable && currentIndex > 1 && matchesKey(data, Key.ctrlShift("left"))) {
 					done("__BACK__");
 					return;
@@ -753,7 +751,7 @@ async function showQuestionTUI(
 /**
  * Run the PRD phase:
  * 1. Ask user if they want to create a PRD
- * 2. Call sub-agent → gets PRD Markdown
+ * 2. Call current agent → gets PRD Markdown
  * 3. Save to .pi-dev-output/pi-prd/<name>.md
  * 4. Ask if user wants to start development
  */
@@ -770,37 +768,45 @@ export async function runPRDPhase(
 	);
 	if (!wantPrd) return null;
 
-	const prdContent = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-		const loader = new BorderedLoader(tui, theme, "📝 AI 正在生成 PRD 文档...");
-		loader.onAbort = () => done(null);
-
-		const prdTask = [
-			"请根据以下上下文生成一份 PRD（产品需求文档）。",
-			"输出格式必须是完整的 Markdown 文档。",
-			"",
-			"=== 上下文 ===",
-			context,
-		].join("\n");
-
-		spawnSubagent(_defaultPrdAgent, prdTask, ctx.cwd, loader.signal)
-			.then((result) => {
-				const output = extractFinalOutput(result.output);
-				done(output && output.length >= 50 ? output : null);
-			})
-			.catch(() => done(null));
-
-		return loader;
-	});
-
-	if (!prdContent) {
-		return null;
-	}
-
 	const prdDir = ensureOutputDir(ctx.cwd, PRD_DIRNAME);
 	const filename = generatePrdFilename(moduleHint);
 	const filePath = path.join(DEV_OUTPUT_DIR, PRD_DIRNAME, filename);
 	const fullPath = path.join(prdDir, filename);
-	fs.writeFileSync(fullPath, prdContent, "utf-8");
+
+	const prdTask = [
+		"请根据以下上下文生成一份 PRD（产品需求文档）。",
+		"输出格式必须是完整的 Markdown 文档。",
+		"",
+		"=== 上下文 ===",
+		context,
+		"",
+		`请使用 write 工具将完整 PRD 写入以下路径: ${fullPath}`,
+		"不要在聊天中输出全文，只需确认写入完成。",
+	].join("\n");
+
+	const sentAt = Date.now();
+	pi.sendUserMessage(prdTask, { deliverAs: "followUp" });
+	try {
+		await ctx.waitForIdle(5 * 60_000);
+	} catch { /* ignore */ }
+
+	let prdContent = "";
+	try {
+		prdContent = fs.readFileSync(fullPath, "utf-8").trim();
+	} catch { /* file not written yet */ }
+
+	if (!prdContent) {
+		prdContent = getLastAssistantTextAfter(ctx, sentAt);
+	}
+
+	if (!prdContent || prdContent.length < 50) {
+		return null;
+	}
+
+	// Fallback: if the agent chatted the PRD instead of writing it, persist it ourselves.
+	if (!fs.existsSync(fullPath)) {
+		fs.writeFileSync(fullPath, prdContent, "utf-8");
+	}
 
 	await askDevelopmentStart(pi, ctx, prdContent, filePath);
 	return { content: prdContent, filePath };
@@ -876,5 +882,4 @@ async function askDevelopmentStart(
 //
 export default function (_pi: ExtensionAPI) {
 	// grill-me-agent is a helper module, not a standalone extension.
-	// It is imported by dev-prompts.ts to provide grill + PRD phases.
 }
