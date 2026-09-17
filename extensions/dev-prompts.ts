@@ -30,6 +30,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { runGrillPhase, runPRDPhase, saveAnswerFile, recoverFromBackup, type GrillOptions } from "./grill-me-agent";
+import { waitForIdleWithTimeout } from "./session-utils";
 import { uiSelect, uiConfirm, uiInput, BACK_MARKER } from "./ui-helpers";
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -94,9 +95,12 @@ async function runReview(task: string, ctx: ExtensionCommandContext, pi: Extensi
 	const startTime = Date.now();
 	ctx.ui.notify("🤖 正在运行代码审查，请稍候...", "info");
 
-	pi.sendUserMessage(`/skill:review-html\n\n${task}`, { deliverAs: "followUp" });
+	pi.sendUserMessage(`/skill:review-html\n\n${task}`, {
+		deliverAs: "followUp",
+		expandPromptTemplates: true,
+	});
 	try {
-		await ctx.waitForIdle(10 * 60_000);
+		await waitForIdleWithTimeout(ctx, 10 * 60_000);
 	} catch {
 		// Agent may have failed; check for output anyway
 	}
@@ -622,6 +626,8 @@ export default function (pi: ExtensionAPI) {
 	// ── Auto review detection (runs in the current agent) ─────────
 	pi.on("input", async (event, ctx) => {
 		if (!ctx.hasUI) return { action: "continue" };
+		// 扩展注入的消息（sendUserMessage，source 为 "extension"）不重入本处理器，避免无限递归
+		if (event.source === "extension") return { action: "continue" };
 
 		const text = event.text.trim().toLowerCase();
 
@@ -720,15 +726,6 @@ export default function (pi: ExtensionAPI) {
 			// ── PRD phase (current agent) ──────────────────────────
 			await runPRDPhase(finalPrompt, (answers as FeatFields).module || "feature", pi, ctx);
 
-			if (!finalPrompt) {
-				const recovered = recoverFromBackup(ctx.cwd);
-				if (recovered) {
-					saveAnswerFile(ctx.cwd, recovered);
-					pi.sendUserMessage(recovered, { deliverAs: "followUp" });
-					return;
-				}
-				return;
-			}
 			saveAnswerFile(ctx.cwd, finalPrompt);
 			pi.sendUserMessage(finalPrompt, { deliverAs: "followUp" });
 		},
