@@ -1,0 +1,76 @@
+# .pre-commit-config.yaml
+# 优先使用 prek run --all-files 命令扫描 or 通过 git 自动触发
+repos:
+  # ============================================================
+  # 1. 通用文件检查（pre-commit-hooks v6.0.0）
+  # 官方仓库：https://github.com/pre-commit/pre-commit-hooks
+  # 注意：v6.0.0 要求 Python >= 3.9，并移除了
+  #       check-byte-order-marker 和 fix-encoding-pragma 两个钩子
+  # ============================================================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # 移除行尾多余的空格
+      # 覆盖 TS/JS/JSON/YAML/Markdown 等文本文件
+      - id: trailing-whitespace
+        name: 移除行尾多余空格
+
+      # 检查代码中是否有未解决的合并冲突标记（<<<<<<< / ======= / >>>>>>>）
+      - id: check-merge-conflict
+        name: 检查合并冲突标记
+
+      # 检查添加的图片是否过大（默认限制 10240KB，即 10MB）
+      - id: check-added-large-files
+        name: 检查添加文件是否过大
+        args: ['--maxkb=10240']
+        files: '\.(jpeg|jpg|png)$'
+
+      # 检查 YAML 语法是否正确（如 CI 配置、docker-compose 等）
+      - id: check-yaml
+        name: 检查 YAML 语法
+
+      # 检查 JSON 语法是否正确（如 package.json 等）
+      # 排除常见的 JSONC 文件：tsconfig / jsconfig 通常允许注释
+      - id: check-json
+        name: 检查 JSON 语法
+        exclude: '^(tsconfig|jsconfig)(\..*)?\.json$'
+
+      # 检测私钥文件（SSH / PGP / RSA 等）是否被误提交
+      # 防止敏感私钥泄漏到仓库
+      - id: detect-private-key
+        name: 检测私钥文件
+
+  # ============================================================
+  # 2. 密钥泄露检测（Betterleaks，使用本机已安装版本）
+  # 官方仓库：https://github.com/betterleaks/betterleaks
+  # 通过 brew install betterleaks 或 brew install betterleaks/tap/betterleaks 安装
+  # 版本：v1.8.1（2026-08-18 发布）
+  # 说明：
+  #   - Gitleaks 已进入仅安全补丁维护阶段，Betterleaks 为其官方继任者
+  #   - 由 Gitleaks 原作者 Zach Rice 及原班人马维护
+  #   - 完全兼容原有的 .gitleaks.toml 配置和 .gitleaksignore 文件
+  #   - 检测 800+ 种密钥类型，支持 Expr 过滤、密钥有效性验证等高级功能
+  #   - 改用 local + system，直接调用本机 PATH 中的 betterleaks，
+  #     避免 prek 下载 Go 工具链并重新编译安装
+  # ============================================================
+  - repo: local
+    hooks:
+      - id: betterleaks
+        name: 检测密钥泄露
+        entry: betterleaks git --pre-commit --staged --verbose
+        language: system
+        pass_filenames: false
+
+  # ============================================================
+  # 3. ast-grep 结构化规则检查
+  # 官方仓库：https://github.com/joshuadavidthomas/ast-grep-rules
+  # 最新版本：v0.5.0（2026-07-25 发布）
+  # 说明：使用 AST 进行结构化代码搜索与检查，支持自定义 YAML 规则
+  # 这里只对 TS/JS 相关文件运行，避免检查无关语言文件
+  # ============================================================
+  - repo: https://github.com/joshuadavidthomas/ast-grep-rules
+    rev: v0.5.0
+    hooks:
+      - id: all
+        name: ast-grep 结构化检查
+        files: '\.(ts|tsx|js|jsx|mjs|cjs)$'
