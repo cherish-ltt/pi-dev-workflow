@@ -30,7 +30,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { runGrillPhase, runPRDPhase, saveAnswerFile, recoverFromBackup, type GrillOptions } from "./grill-me-agent";
-import { waitForIdleWithTimeout } from "./session-utils";
+import { waitForIdleWithTimeout, detectProjectDefaults, defaultAcceptance, type ProjectDefaults } from "./session-utils";
 import { uiSelect, uiConfirm, uiInput, BACK_MARKER } from "./ui-helpers";
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -44,6 +44,25 @@ async function ask(
 	initialValue = "",
 ): Promise<string | undefined> {
 	return uiInput(ctx, label, placeholder, false, backable, initialValue);
+}
+
+/** 向导中的一次提问；多个字段用 sep 分隔一次填写，减少提问轮次。 */
+interface WizardQuestion {
+	label: string;
+	placeholder: string;
+	/** 绑定的字段集合，答案按 sep 拆分后依序填入。 */
+	keys: string[];
+	/** 字段分隔符，默认 " / "。 */
+	sep?: string;
+}
+
+/** 将一次回答填入字段。单字段问题时保留完整输入（不按分隔符拆分），避免误切。 */
+function assignAnswers(answers: Record<string, string>, q: WizardQuestion, raw: string): void {
+	const parts = q.keys.length === 1 ? [raw] : raw.split(q.sep ?? " / ").map((s) => s.trim());
+	q.keys.forEach((k, i) => {
+		const part = parts[i];
+		if (part) answers[k] = part;
+	});
 }
 
 /** Check if a field value is empty or explicitly "无". */
@@ -125,6 +144,8 @@ interface FeatFields {
 	description: string;
 	painPoint: string;
 	testCmd: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleFeatPrompt(f: FeatFields): string {
@@ -151,6 +172,7 @@ function assembleFeatPrompt(f: FeatFields): string {
 	if (!isEmpty(f.testCmd)) {
 		lines.push(`**验证**：运行 ${f.testCmd!.trim()} 确保无回归。`);
 	}
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
@@ -162,6 +184,8 @@ interface FixFields {
 	expected: string;
 	actualError: string;
 	testCmd: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleFixPrompt(f: FixFields): string {
@@ -183,6 +207,7 @@ function assembleFixPrompt(f: FixFields): string {
 	if (!isEmpty(f.testCmd)) {
 		lines.push(`**验证**：运行 ${f.testCmd!.trim()} 确认修复。`);
 	}
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
@@ -192,6 +217,8 @@ interface DocFields {
 	keyInfo: string;
 	language: string;
 	existingMaterial: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleDocPrompt(f: DocFields): string {
@@ -212,6 +239,7 @@ function assembleDocPrompt(f: DocFields): string {
 	lines.push("**输出格式**：Markdown 层级标题，必要时插入表格/列表。");
 	lines.push("**约束**：避免空洞词汇（如\"细致入微\"\"深入探究\"）；每段都应有实质信息；保持原意，不添加原文没有的事实。");
 	lines.push("**验证**：请先提供大纲，经我确认后再扩展。");
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
@@ -221,6 +249,8 @@ interface RefactorFields {
 	problems: string;
 	goal: string;
 	testCmd: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleRefactorPrompt(f: RefactorFields): string {
@@ -243,6 +273,7 @@ function assembleRefactorPrompt(f: RefactorFields): string {
 	if (!isEmpty(f.testCmd)) {
 		lines.push(`**验证**：运行 ${f.testCmd!.trim()} 并确保全部通过。`);
 	}
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
@@ -252,6 +283,8 @@ interface TestFields {
 	coverage: string;
 	edgeCases: string;
 	testCmd: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleTestPrompt(f: TestFields): string {
@@ -268,6 +301,7 @@ function assembleTestPrompt(f: TestFields): string {
 	if (!isEmpty(f.testCmd)) {
 		lines.push(`**验证**：运行 ${f.testCmd!.trim()} 并展示覆盖率报告。`);
 	}
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
@@ -277,6 +311,8 @@ interface ChoreFields {
 	envDesc: string;
 	targetVersion: string;
 	verifyCmd: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleChorePrompt(f: ChoreFields): string {
@@ -298,6 +334,7 @@ function assembleChorePrompt(f: ChoreFields): string {
 	if (!isEmpty(f.verifyCmd)) {
 		lines.push(`**验证**：运行 ${f.verifyCmd!.trim()} 并展示结果。`);
 	}
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
@@ -307,6 +344,8 @@ interface PerfFields {
 	currentCost: string;
 	targetLatency: string;
 	benchCmd: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assemblePerfPrompt(f: PerfFields): string {
@@ -326,6 +365,7 @@ function assemblePerfPrompt(f: PerfFields): string {
 	}
 	lines.push("**输出**：提供 before/after 性能对比表格。");
 	lines.push("**约束**：不要牺牲核心准确性；优先给出低风险改动；不为了微优化牺牲可读性。");
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
@@ -334,6 +374,8 @@ interface StyleFields {
 	description: string;
 	terms: string;
 	lintCmd: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleStylePrompt(f: StyleFields): string {
@@ -354,12 +396,15 @@ function assembleStylePrompt(f: StyleFields): string {
 	if (!isEmpty(f.lintCmd)) {
 		lines.push(`**验证**：对代码运行 ${f.lintCmd!.trim()} 确保符合规范。`);
 	}
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
 interface SecurityFields {
 	filePath: string;
 	focus: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleSecurityPrompt(f: SecurityFields): string {
@@ -373,6 +418,7 @@ function assembleSecurityPrompt(f: SecurityFields): string {
 	lines.push("3. 只审查不修改，输出审查报告。");
 	lines.push("**硬性约束**：在隔离上下文中运行，不继承主 Agent 的记忆。");
 	lines.push("**输出**：Markdown 报告，每个问题包含严重级别、行号、风险描述、修复建议。");
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
@@ -380,6 +426,8 @@ interface ExplainFields {
 	concept: string;
 	audience: string;
 	depth: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleExplainPrompt(f: ExplainFields): string {
@@ -395,6 +443,7 @@ function assembleExplainPrompt(f: ExplainFields): string {
 	lines.push("4. 如有常见误区，明确指出。");
 	lines.push("**输出格式**：Markdown，必要时插入图示描述。");
 	lines.push("**验证**：请先给出一句话总结，经我确认后再展开。");
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
@@ -402,6 +451,8 @@ interface CompareFields {
 	itemA: string;
 	itemB: string;
 	dimensions: string;
+	acceptance?: string;
+	extra?: string;
 }
 
 function assembleComparePrompt(f: CompareFields): string {
@@ -416,10 +467,89 @@ function assembleComparePrompt(f: CompareFields): string {
 	lines.push("3. 给出综合结论和建议。");
 	lines.push("**输出格式**：Markdown 表格 + 简短分析。");
 	lines.push("**约束**：客观中立，不偏袒任何一方，明确标注不确定的结论。");
+	appendMeta(lines, f);
 	return lines.join("\n");
 }
 
-// ── Command runner ───────────────────────────────────────────
+// ── 四段式收尾：验收标准 + 额外补充 ───────────────────────────
+
+/** 追加“验收标准 / 额外补充”段落（用户填写或默认填充，保证提示词不空白）。 */
+function appendMeta(lines: string[], f: { acceptance?: string; extra?: string }): void {
+	if (f.acceptance?.trim()) {
+		lines.push("");
+		lines.push(`**验收标准**：${f.acceptance.trim()}`);
+	}
+	if (f.extra?.trim()) {
+		lines.push("");
+		lines.push(`**额外补充**：${f.extra.trim()}`);
+	}
+}
+
+// ── 默认字段填充：未提问/跳过的字段注入流畅默认值 ───────────────
+
+const FIELD_DEFAULTS: Record<string, (d: ProjectDefaults) => Record<string, string>> = {
+	feat: (d) => ({
+		language: d.language || "项目使用的主流语言",
+		techStack: "项目当前技术栈",
+		module: "项目相关模块",
+		testCmd: d.testCmd,
+	}),
+	fix: (d) => ({
+		expected: "修复后行为符合预期",
+		actualError: "当前实际的报错信息",
+		testCmd: d.testCmd,
+	}),
+	doc: (d) => ({
+		audience: "目标读者",
+		keyInfo: "该模块的核心用法与关键概念",
+		language: d.language || "项目语言",
+	}),
+	refactor: (d) => ({
+		problems: "可读性/可维护性等结构性问题",
+		goal: "可读性与可维护性",
+		testCmd: d.testCmd,
+	}),
+	test: (d) => ({
+		framework: "项目采用的测试框架",
+		coverage: "90",
+		edgeCases: "null 值、空值、超时、幂等性、重试、成功路径、4xx/5xx 错误、边界条件",
+		testCmd: d.testCmd,
+	}),
+	chore: (d) => ({
+		envDesc: "项目运行环境",
+		targetVersion: "按任务指定的版本",
+		verifyCmd: d.testCmd || d.lintCmd,
+	}),
+	perf: () => ({
+		bottleneck: "性能瓶颈",
+		currentCost: "需先测量基准",
+		targetLatency: "按需求设定的延迟",
+		benchCmd: "",
+	}),
+	style: (d) => ({
+		targetStyle: "简洁清晰的风格",
+		lintCmd: d.lintCmd,
+	}),
+	security: () => ({
+		focus: "认证边界、注入漏洞、敏感数据暴露、CSRF/CORS 配置、权限校验缺失",
+	}),
+	explain: () => ({
+		audience: "对概念感兴趣的技术读者",
+		depth: "基础",
+	}),
+	compare: () => ({
+		dimensions: "性能、生态、学习曲线、社区支持",
+	}),
+};
+
+/** 注入未填字段的默认值；验收标准为空时使用项目常规验收。 */
+function applyDefaults(answers: Record<string, string>, type: string, d: ProjectDefaults): void {
+	const injected = FIELD_DEFAULTS[type]?.(d) ?? {};
+	for (const [k, v] of Object.entries(injected)) {
+		if (!answers[k]?.trim()) answers[k] = v;
+	}
+	if (!answers.acceptance?.trim()) answers.acceptance = defaultAcceptance(d);
+}
 
 /**
  * Run a wizard: ask questions, assemble prompt, persist it, and send to the current agent.
@@ -429,7 +559,7 @@ async function runWizard(
 	pi: ExtensionAPI,
 	type: string,
 	label: string,
-	questions: Array<{ label: string; placeholder: string; key: string }>,
+	questions: WizardQuestion[],
 	assembler: (answers: Record<string, string>) => string,
 ): Promise<void> {
 	const answers: Record<string, string> = {};
@@ -437,7 +567,7 @@ async function runWizard(
 
 	while (idx >= 0 && idx < questions.length) {
 		const q = questions[idx]!;
-		const existingVal = answers[q.key];
+		const existingVal = answers[q.keys[0]!];
 		const placeholder = existingVal
 			? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
 			: q.placeholder;
@@ -455,10 +585,11 @@ async function runWizard(
 			// Already at first question → cancel
 			return;
 		}
-		answers[q.key] = val;
+		assignAnswers(answers, q, val);
 		idx++;
 	}
 
+	applyDefaults(answers, type, detectProjectDefaults(ctx.cwd));
 	const prompt = assembler(answers);
 
 	// ── Guard & persist before sending ──────────────────────
@@ -477,7 +608,7 @@ async function runWizardWithGrill(
 	pi: ExtensionAPI,
 	type: string,
 	label: string,
-	questions: Array<{ label: string; placeholder: string; key: string }>,
+	questions: WizardQuestion[],
 	assembler: (answers: Record<string, string>) => string,
 	grillOptions?: GrillOptions,
 ): Promise<void> {
@@ -486,7 +617,7 @@ async function runWizardWithGrill(
 
 	while (idx >= 0 && idx < questions.length) {
 		const q = questions[idx]!;
-		const existingVal = answers[q.key];
+		const existingVal = answers[q.keys[0]!];
 		const placeholder = existingVal
 			? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
 			: q.placeholder;
@@ -501,10 +632,11 @@ async function runWizardWithGrill(
 			}
 			return;
 		}
-		answers[q.key] = val;
+		assignAnswers(answers, q, val);
 		idx++;
 	}
 
+	applyDefaults(answers, type, detectProjectDefaults(ctx.cwd));
 	const basePrompt = assembler(answers);
 
 	// ── Grill phase (current agent) ─────────────────────────
@@ -536,88 +668,74 @@ async function runWizardWithGrill(
 }
 
 // ── Questions for each command ────────────────────────────────
+// 每命令 2-5 问：核心字段 + 验收标准（可跳过，回车用默认）+ 额外补充（可跳过）。
 
-const FEAT_QUESTIONS = [
-	{ label: "编程语言/框架", placeholder: "如 TypeScript, Python, Rust...", key: "language" },
-	{ label: "技术栈", placeholder: "如 NestJS + Prisma, React + Express...", key: "techStack" },
-	{ label: "目标模块/文件名", placeholder: "如 src/auth/login.ts", key: "module" },
-	{ label: "核心功能描述", placeholder: "用户可以通过邮箱+密码注册并登录", key: "description" },
-	{ label: "用户痛点/当前缺少", placeholder: "当前缺少用户认证系统，每次手动校验身份", key: "painPoint" },
-	{ label: "测试命令（可选）", placeholder: "如 npm test, cargo test, go test...", key: "testCmd" },
+const FEAT_QUESTIONS: WizardQuestion[] = [
+	{ label: "核心功能描述（必填）", placeholder: "如 实现邮箱密码注册登录；模块/技术细节可在最后补充", keys: ["description"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认：项目测试 + lint + pre-commit + CI 常规验收", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 目标模块 src/auth/login.ts、技术栈 NestJS、当前痛点、测试命令等", keys: ["extra"] },
 ];
 
-const FIX_QUESTIONS = [
-	{ label: "文件路径", placeholder: "如 src/auth/login.ts", key: "filePath" },
-	{ label: "行号（可选）", placeholder: "如 42，留空则扫描整个文件", key: "lineNumber" },
-	{ label: "Bug 描述", placeholder: "登录接口在密码正确时返回 401", key: "bugDesc" },
-	{ label: "输入/现象", placeholder: "输入正确邮箱和密码，返回 401 错误", key: "inputDesc" },
-	{ label: "预期行为", placeholder: "应返回 200 和 token", key: "expected" },
-	{ label: "当前错误信息", placeholder: "Unauthorized (401) - 不符合预期的输出", key: "actualError" },
-	{ label: "测试命令（可选）", placeholder: "如 npm test, go test...", key: "testCmd" },
+const FIX_QUESTIONS: WizardQuestion[] = [
+	{ label: "问题文件路径", placeholder: "如 src/auth/login.ts（可带 #L42）", keys: ["filePath"] },
+	{ label: "Bug 现象描述", placeholder: "如 登录接口在密码正确时返回 401", keys: ["bugDesc"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认验收标准（测试/lint/pre-commit/CI）", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 输入现象、预期行为、当前报错、测试命令等", keys: ["extra"] },
 ];
 
-const DOC_QUESTIONS = [
-	{ label: "模块/API/doc 名称", placeholder: "如 AuthService, REST API v2...", key: "moduleName" },
-	{ label: "目标受众", placeholder: "如 小白 / 前端开发者 / 架构师", key: "audience" },
-	{ label: "关键信息点", placeholder: "他们需要了解如何使用认证接口", key: "keyInfo" },
-	{ label: "示例语言", placeholder: "如 TypeScript, Python, curl...", key: "language" },
-	{ label: "已有材料（可选）", placeholder: "现有 README、笔记、文件路径等，留空则从零生成", key: "existingMaterial" },
+const DOC_QUESTIONS: WizardQuestion[] = [
+	{ label: "文档对象（模块/API/doc 名称）", placeholder: "如 REST API v2、AuthService", keys: ["moduleName"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认验收标准", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 目标受众、关键信息点、示例语言、已有材料", keys: ["extra"] },
 ];
 
-const REFACTOR_QUESTIONS = [
-	{ label: "文件路径", placeholder: "如 src/auth/login.ts", key: "filePath" },
-	{ label: "代码行数（可选）", placeholder: "如 200 行", key: "lineCount" },
-	{ label: "具体问题", placeholder: "如 重复逻辑、耦合度高、可读性差", key: "problems" },
-	{ label: "重构目标", placeholder: "如 可读性 / 可维护性 / 模块化", key: "goal" },
-	{ label: "测试命令（可选）", placeholder: "如 npm test, cargo test...", key: "testCmd" },
+const REFACTOR_QUESTIONS: WizardQuestion[] = [
+	{ label: "文件路径", placeholder: "如 src/auth/login.ts（可标约行数）", keys: ["filePath"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认验收标准", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 具体问题、重构目标、测试命令", keys: ["extra"] },
 ];
 
-const TEST_QUESTIONS = [
-	{ label: "文件路径", placeholder: "如 src/auth/login.ts", key: "filePath" },
-	{ label: "测试框架", placeholder: "如 Jest / Vitest / pytest / Go test", key: "framework" },
-	{ label: "目标覆盖率", placeholder: "如 90，留空默认 90%", key: "coverage" },
-	{ label: "边界条件", placeholder: "如 null 值、空值、超时、幂等性、4xx/5xx 错误", key: "edgeCases" },
-	{ label: "测试命令（可选）", placeholder: "如 npm test -- --coverage", key: "testCmd" },
+const TEST_QUESTIONS: WizardQuestion[] = [
+	{ label: "文件路径", placeholder: "如 src/auth/login.ts", keys: ["filePath"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认验收标准（含覆盖率与边界条件）", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 测试框架、目标覆盖率、重点边界条件、测试命令", keys: ["extra"] },
 ];
 
-const CHORE_QUESTIONS = [
-	{ label: "配置文件/目标路径", placeholder: "如 package.json, .github/workflows/ci.yml", key: "configPath" },
-	{ label: "具体任务", placeholder: "如 更新依赖、修改构建脚本、调整 CI 配置", key: "task" },
-	{ label: "当前环境描述", placeholder: "如 Node 18, pnpm 8", key: "envDesc" },
-	{ label: "目标版本", placeholder: "如 Node 20, pnpm 9", key: "targetVersion" },
-	{ label: "验证命令（可选）", placeholder: "如 npm run build, pnpm test...", key: "verifyCmd" },
+const CHORE_QUESTIONS: WizardQuestion[] = [
+	{ label: "配置文件/目标路径", placeholder: "如 package.json、.github/workflows/ci.yml", keys: ["configPath"] },
+	{ label: "具体任务", placeholder: "如 升级 eslint 到 v9、调整构建脚本", keys: ["task"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认验收标准", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 当前环境、目标版本、验证命令", keys: ["extra"] },
 ];
 
-const PERF_QUESTIONS = [
-	{ label: "文件路径", placeholder: "如 src/services/query.ts", key: "filePath" },
-	{ label: "瓶颈描述", placeholder: "如 数据库查询延迟过高、内存泄漏", key: "bottleneck" },
-	{ label: "当前执行耗时", placeholder: "如 5 秒 / 成本 $0.02/次", key: "currentCost" },
-	{ label: "目标延迟", placeholder: "如 200ms", key: "targetLatency" },
-	{ label: "基准测试命令（可选）", placeholder: "如 npm run bench, go test -bench=.", key: "benchCmd" },
+const PERF_QUESTIONS: WizardQuestion[] = [
+	{ label: "文件路径", placeholder: "如 src/services/query.ts", keys: ["filePath"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认验收标准（含基准对比）", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 瓶颈、当前耗时/成本、目标延迟、基准命令", keys: ["extra"] },
 ];
 
-const STYLE_QUESTIONS = [
-	{ label: "目标风格", placeholder: "如 正式商务 / 幽默 / 简洁要点式 / Prettier 规范", key: "targetStyle" },
-	{ label: "待调整内容描述", placeholder: "如 以下函数需要调整命名风格，或粘贴文本", key: "description" },
-	{ label: "术语统一（可选）", placeholder: "如 API → 接口, user → 用户", key: "terms" },
-	{ label: "Linter/格式化命令（可选）", placeholder: "如 npx prettier --check, npm run lint", key: "lintCmd" },
+const STYLE_QUESTIONS: WizardQuestion[] = [
+	{ label: "待调整内容", placeholder: "如 调整以下函数的命名风格，或粘贴文本", keys: ["description"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认验收标准（含 lint）", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 目标风格、术语统一、校验命令", keys: ["extra"] },
 ];
 
-const SECURITY_QUESTIONS = [
-	{ label: "文件路径", placeholder: "如 src/api/auth.ts", key: "filePath" },
-	{ label: "审查重点（可选）", placeholder: "如 认证边界、注入漏洞、敏感数据暴露、CSRF/CORS、权限校验", key: "focus" },
+const SECURITY_QUESTIONS: WizardQuestion[] = [
+	{ label: "文件路径", placeholder: "如 src/api/auth.ts", keys: ["filePath"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认安全审查清单", keys: ["acceptance"] },
 ];
 
-const EXPLAIN_QUESTIONS = [
-	{ label: "概念名称", placeholder: "如 React Server Component, HTTP/3", key: "concept" },
-	{ label: "目标受众", placeholder: "如 小白 / 开发者 / 架构师", key: "audience" },
-	{ label: "理解深度（可选）", placeholder: "如 基础 / 进阶，留空默认基础", key: "depth" },
+const EXPLAIN_QUESTIONS: WizardQuestion[] = [
+	{ label: "概念名称", placeholder: "如 React Server Component、HTTP/3", keys: ["concept"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认验收标准", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 目标受众、理解深度", keys: ["extra"] },
 ];
 
-const COMPARE_QUESTIONS = [
-	{ label: "对比对象 A", placeholder: "如 Vue 3, Next.js, PostgreSQL...", key: "itemA" },
-	{ label: "对比对象 B", placeholder: "如 React 18, Nuxt 3, MySQL...", key: "itemB" },
-	{ label: "评估维度（可选）", placeholder: "如 性能、生态、学习曲线、社区支持", key: "dimensions" },
+const COMPARE_QUESTIONS: WizardQuestion[] = [
+	{ label: "对比对象 A", placeholder: "如 Vue 3", keys: ["itemA"] },
+	{ label: "对比对象 B", placeholder: "如 React 18", keys: ["itemB"] },
+	{ label: "验收标准（可跳过）", placeholder: "直接回车将使用默认验收标准", keys: ["acceptance"] },
+	{ label: "额外补充（可跳过）", placeholder: "如 评估维度（性能/生态/学习曲线等）", keys: ["extra"] },
 ];
 
 // ── Extension ────────────────────────────────────────────────
@@ -691,7 +809,7 @@ export default function (pi: ExtensionAPI) {
 			let featIdx = 0;
 			while (featIdx >= 0 && featIdx < FEAT_QUESTIONS.length) {
 				const q = FEAT_QUESTIONS[featIdx]!;
-				const existingVal = answers[q.key];
+				const existingVal = answers[q.keys[0]!];
 				const placeholder = existingVal
 					? `(之前: ${existingVal.slice(0, 60)}) ${q.placeholder}`
 					: q.placeholder;
@@ -706,10 +824,11 @@ export default function (pi: ExtensionAPI) {
 					}
 					return;
 				}
-				answers[q.key] = val;
+				assignAnswers(answers, q, val);
 				featIdx++;
 			}
 
+			applyDefaults(answers, "feat", detectProjectDefaults(ctx.cwd));
 			const basePrompt = assembleFeatPrompt(answers as FeatFields);
 
 			const grillResult = await runGrillPhase(basePrompt, ctx, pi, {

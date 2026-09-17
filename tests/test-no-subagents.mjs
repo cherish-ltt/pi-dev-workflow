@@ -123,6 +123,12 @@ assertIncludes("skills/review-html/SKILL.md", ".pi-dev-output/pi-review/html/", 
 
 const devPrompts = fs.readFileSync(path.resolve(ROOT, "extensions/dev-prompts.ts"), "utf-8");
 assertIncludes("extensions/dev-prompts.ts", ".pi-dev-output/pi-review/html", "自动审查仍查找 pi-review/html/");
+assertIncludes("extensions/session-utils.ts", "detectProjectDefaults", "项目探测（语言/测试/lint/pre-commit/CI）");
+assertIncludes("extensions/session-utils.ts", "defaultAcceptance", "生成默认验收标准");
+assertIncludes("extensions/dev-prompts.ts", "applyDefaults", "未填字段注入默认值");
+assertIncludes("extensions/dev-prompts.ts", "**验收标准**", "四段式：验收标准段");
+assertIncludes("extensions/dev-prompts.ts", "WizardQuestion", "提问结构支持字段合并");
+assertIncludes("extensions/dev-prompts.ts", "assignAnswers", "提问支持单值/多字段填写");
 
 // ═══════════════════════════════════════════════════════════════
 //  Summary
