@@ -21,9 +21,11 @@ const COMMIT_BATCH_TASK = [
 	"1. 执行 git status 与 git diff 查看当前变更，识别变更内容，必要时先用 git add 暂存相关文件。",
 	"2. 按 Conventional Commits 规范分批提交：把逻辑相关的改动拆成独立 commit，避免无关改动混入同一 commit；提交信息描述使用中文。",
 	"3. 直接执行提交，不需要向我确认。",
+	"4. 严谨修改任何代码，只做 git commit 工作。",
+	"5. 你的任务：识别 diff -> 分批提交;请迅速完成，不要进行额外的无关任务思考。"
 ].join("\n");
 
-const COMMIT_PUSH_TASK = COMMIT_BATCH_TASK + "\n4. 全部提交完成后执行 git push 推送。";
+const COMMIT_PUSH_TASK = COMMIT_BATCH_TASK + "\n6. 全部提交完成后执行 git push 推送。";
 
 // ── Helpers ──────────────────────────────────────────────────
 
