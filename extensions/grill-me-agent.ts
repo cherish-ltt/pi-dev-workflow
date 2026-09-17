@@ -16,7 +16,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { BorderedLoader, DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
 	SelectList,
@@ -29,6 +29,7 @@ import {
 	type SelectItem,
 } from "@earendil-works/pi-tui";
 import { uiSelect, uiConfirm, uiInput } from "./ui-helpers";
+import { waitForIdleWithTimeout, getLastAssistantTextAfter } from "./session-utils";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -331,45 +332,6 @@ function extractQuestionArray(raw: string): Array<{ question: string; options: s
 	}
 }
 
-/**
- * Extract the most recent assistant message text that arrived after a given moment.
- * Used as fallback when the agent did not write the expected file.
- */
-export function getLastAssistantTextAfter(ctx: ExtensionCommandContext, afterMs: number): string {
-	const leafId = ctx.sessionManager.getLeafId();
-	if (!leafId) return "";
-	try {
-		const branch = ctx.sessionManager.getBranch(leafId);
-		let text = "";
-		for (const entry of branch) {
-			if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-			const ts = new Date(entry.timestamp).getTime();
-			if (ts > afterMs) {
-				text = extractMessageText(entry.message.content) || text;
-			}
-		}
-		return text;
-	} catch {
-		return "";
-	}
-}
-
-function extractMessageText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (Array.isArray(content)) {
-		return content
-			.map((part) => {
-				if (typeof part === "string") return part;
-				if (part && typeof part === "object" && "type" in part && part.type === "text") {
-					return (part as { text: string }).text;
-				}
-				return "";
-			})
-			.join("\n");
-	}
-	return "";
-}
-
 // ── Grill Phase ──────────────────────────────────────────────
 
 /**
@@ -426,7 +388,7 @@ export async function runGrillPhase(
 	const sentAt = Date.now();
 	pi.sendUserMessage(enhancedPrompt, { deliverAs: "followUp" });
 	try {
-		await ctx.waitForIdle(5 * 60_000);
+		await waitForIdleWithTimeout(ctx, 5 * 60_000);
 	} catch {
 		// Agent may have failed; fall back to whatever was written
 	}
@@ -487,7 +449,7 @@ export async function runGrillPhase(
 				const retrySentAt = Date.now();
 				pi.sendUserMessage(retryPrompt, { deliverAs: "followUp" });
 				try {
-					await ctx.waitForIdle(5 * 60_000);
+					await waitForIdleWithTimeout(ctx, 5 * 60_000);
 				} catch { /* ignore */ }
 
 				let retryQuestions = readQuestionsFromFile(retryPath);
@@ -787,7 +749,7 @@ export async function runPRDPhase(
 	const sentAt = Date.now();
 	pi.sendUserMessage(prdTask, { deliverAs: "followUp" });
 	try {
-		await ctx.waitForIdle(5 * 60_000);
+		await waitForIdleWithTimeout(ctx, 5 * 60_000);
 	} catch { /* ignore */ }
 
 	let prdContent = "";
@@ -800,6 +762,7 @@ export async function runPRDPhase(
 	}
 
 	if (!prdContent || prdContent.length < 50) {
+		ctx.ui.notify("❌ PRD 生成失败：未获取到有效 PRD 内容，请查看当前代理的回复后重试。", "error");
 		return null;
 	}
 
