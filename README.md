@@ -54,6 +54,18 @@ pi-package/
 | **claude-code-theme** | 仿 Claude Code CLI 配色：深色底 + 琥珀金主色 + 紫罗兰辅色 |
 | **oh-my-pi-titanium** | 钛金属风格主题 |
 
+## 推荐扩展（第三方）
+
+以下为社区推荐的第三方 Pi 扩展，可按需安装：
+
+| 扩展 | 作用 | 安装 |
+|---|---|---|
+| **pi-web-access** | 网页搜索、URL 抓取、GitHub 仓库克隆、PDF 提取、YouTube 视频理解与本地视频分析，支持多家搜索/内容服务提供商 | `pi install npm:pi-web-access` |
+| **pi-mcp-adapter** | MCP（Model Context Protocol）适配器扩展，让 Pi 接入 MCP 工具生态 | `pi install npm:pi-mcp-adapter` |
+| **rpiv-ask-user-question** | 结构化问卷扩展：模型不确定时以带类型的选项向你提问，替代自由文本回复 | `pi install npm:@juicesharp/rpiv-ask-user-question` |
+| **rpiv-todo** | 模型待办清单：实时悬浮面板展示，`/reload` 与会话压缩后依然保留 | `pi install npm:@juicesharp/rpiv-todo` |
+| **@plannotator/pi-extension** | 交互式方案评审扩展：带注释的方案审查，可标注 Agent 消息，审查代码/PR | `pi install npm:@plannotator/pi-extension` |
+
 ## Git 命令
 
 三个命令直接通过 pi 的内置执行器运行 git，结果写入当前会话上下文，不需要隔离的子代理进程。
