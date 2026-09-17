@@ -1,0 +1,56 @@
+# 发布 GitHub Release
+#
+# 触发：推送 v* 标签时（如 v0.7.0）
+# 行为：自动读取 .version/RELEASE-<tag>.md 作为 release 内容；
+#       若未找到对应版本说明文件，则写入默认提示，引导查看 git commit 确认变动。
+#
+# 版本说明文件命名约定：.version/RELEASE-v0.7.0.md（与 tag 同名）
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 读取本 tag 对应的版本说明；不存在或为空时写默认提示。
+      - name: 准备 release 说明
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          FILE=".version/RELEASE-${TAG}.md"
+          BODY_TMP="/tmp/release-body.md"
+
+          if [ -s "$FILE" ]; then
+            cp "$FILE" "$BODY_TMP"
+            echo "已读取版本说明: $FILE"
+          else
+            sed "s|__TAG__|${TAG}|g" > "$BODY_TMP" <<'EOF'
+          > [!WARNING]
+          > 本版本 `__TAG__` 未找到对应的版本说明文件（`.version/RELEASE-__TAG__.md`）。
+          >
+          > 请通过 git commit 记录确认本次发布的改动内容，例如：
+          >
+          > ```bash
+          > git log --oneline "<上一个标签>"..__TAG__
+          > ```
+          >
+          > 建议在 `.version/RELEASE-__TAG__.md` 中补充完整的 release 说明，release 会自动读取该文件。
+          EOF
+            echo "未找到版本说明 $FILE，已写入默认提示"
+          fi
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: /tmp/release-body.md
