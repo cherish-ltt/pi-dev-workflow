@@ -30,7 +30,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { runGrillPhase, runPRDPhase, saveAnswerFile, recoverFromBackup, type GrillOptions } from "./grill-me-agent";
-import { waitForIdleWithTimeout, detectProjectDefaults, defaultAcceptance, type ProjectDefaults } from "./session-utils";
+import { detectProjectDefaults, defaultAcceptance, type ProjectDefaults } from "./session-utils";
 import { uiSelect, uiConfirm, uiInput, BACK_MARKER } from "./ui-helpers";
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -78,8 +78,8 @@ function wrap(val: string | undefined, fallback = "..."): string {
 
 // ── Review helper ────────────────────────────────────────────
 
-/** Find the newest HTML review file in .pi-dev-output/pi-review/html/. */
-function findNewestReviewHtml(cwd: string): string {
+/** Find the newest HTML review file generated after `afterMs`（忽略先前遗留的旧报告）。 */
+function findNewestReviewHtml(cwd: string, afterMs: number): string {
 	const candidates = [
 		path.join(cwd, ".pi-dev-output", "pi-review", "html"),
 		path.join(cwd, "pi-review"),
@@ -95,6 +95,7 @@ function findNewestReviewHtml(cwd: string): string {
 						name: f,
 						mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
 					}))
+					.filter(f => f.mtime > afterMs)
 					.sort((a, b) => b.mtime - a.mtime);
 				if (files.length > 0) {
 					const rel = path.relative(cwd, reviewDir);
@@ -118,19 +119,22 @@ async function runReview(task: string, ctx: ExtensionCommandContext, pi: Extensi
 		deliverAs: "followUp",
 		expandPromptTemplates: true,
 	});
-	try {
-		await waitForIdleWithTimeout(ctx, 10 * 60_000);
-	} catch {
-		// Agent may have failed; check for output anyway
+
+	// 以“报告文件生成为完成标志”进行轮询；不使用 waitForIdle，
+	// 避免其在 sendUserMessage 触发的新 turn 开始前立即返回，导致误报“已完成”。
+	const deadline = Date.now() + 10 * 60_000;
+	let filePath = "";
+	while (Date.now() < deadline) {
+		filePath = findNewestReviewHtml(ctx.cwd, startTime);
+		if (filePath) break;
+		await new Promise((r) => setTimeout(r, 2_000));
 	}
 
 	const dur = ((Date.now() - startTime) / 1000).toFixed(1);
-	const filePath = findNewestReviewHtml(ctx.cwd);
-
 	if (filePath) {
 		ctx.ui.notify(`📄 审查报告已生成: ${filePath} (${dur}s)`, "success");
 	} else {
-		ctx.ui.notify(`✅ 代码审查完成 (${dur}s)`, "info");
+		ctx.ui.notify(`⚠️ 审查未生成报告 (${dur}s)，请查看当前代理的回复或稍后重试`, "warning");
 	}
 	return filePath;
 }
@@ -646,7 +650,6 @@ async function runWizardWithGrill(
 			title: grillOptions.title,
 			description: grillOptions.description,
 			questionTitle: grillOptions.questionTitle,
-			loaderLabel: grillOptions.loaderLabel,
 		});
 		if (grillResult.cancelled) {
 			return;
@@ -835,7 +838,6 @@ export default function (pi: ExtensionAPI) {
 				title: "🔍 设计方案追问完善",
 				description: "AI 会通过系统性追问帮你打磨方案：从术语精确化到边界条件验证，确保架构决策的每个分支都经过推敲。",
 				questionTitle: "设计方案追问完善",
-				loaderLabel: "🧠 AI 正在分析代码并生成追问问题...",
 			});
 			if (grillResult.cancelled) {
 				return;
@@ -861,7 +863,6 @@ export default function (pi: ExtensionAPI) {
 					title: "🐛 Bug 根因追问",
 					description: "AI 会通过系统性追问帮你精准定位根因：从复现条件到根本原因推理，再到修复方案验证和回归风险评估。",
 					questionTitle: "Bug 根因分析",
-					loaderLabel: "🧠 AI 正在分析代码并生成根因追问问题...",
 				},
 			);
 		},
@@ -878,7 +879,6 @@ export default function (pi: ExtensionAPI) {
 					title: "📄 文档大纲追问完善",
 					description: "AI 会通过追问帮你完善文档大纲：从受众定位到结构安排，确认术语一致性和示例覆盖范围。",
 					questionTitle: "文档大纲追问完善",
-					loaderLabel: "🧠 AI 正在分析并生成文档大纲追问问题...",
 				},
 			);
 		},
@@ -895,7 +895,6 @@ export default function (pi: ExtensionAPI) {
 					title: "🔧 重构方案追问",
 					description: "AI 会通过追问帮你识别隐藏耦合风险：从模块边界到 API 兼容性，验证行为保持和迁移路径安全性。",
 					questionTitle: "重构方案追问",
-					loaderLabel: "🧠 AI 正在分析代码并生成重构追问问题...",
 				},
 			);
 		},
@@ -912,7 +911,6 @@ export default function (pi: ExtensionAPI) {
 					title: "🧪 测试策略追问",
 					description: "AI 会通过追问帮你发现测试缺口：从覆盖维度到边界条件，验证模拟策略和测试隔离是否到位。",
 					questionTitle: "测试策略追问",
-					loaderLabel: "🧠 AI 正在分析并生成测试追问问题...",
 				},
 			);
 		},
@@ -937,7 +935,6 @@ export default function (pi: ExtensionAPI) {
 					title: "⚡ 性能优化方案追问",
 					description: "AI 会通过追问帮你验证瓶颈判断和优化方向：从基准测试方法到潜在回归风险，确保方案合理性。",
 					questionTitle: "性能优化方案追问",
-					loaderLabel: "🧠 AI 正在分析并生成性能优化追问问题...",
 				},
 			);
 		},

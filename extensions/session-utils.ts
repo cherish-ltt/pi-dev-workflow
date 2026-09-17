@@ -2,7 +2,7 @@
  * session-utils.ts — 跨扩展共享的会话与等待工具
  *
  * 职责：
- *   1. waitForIdleWithTimeout() — 带超时的等待，SDK 的 ctx.waitForIdle() 不接受超时参数
+ *   1. pollFor() — 轮询等待当前代理的产物（文件/文本）出现，带超时
  *   2. getLastAssistantTextAfter() — 提取指定时间点之后最后一条 assistant 文本
  *
  * 供 git-commands.ts / grill-me-agent.ts / dev-prompts.ts 等扩展共享使用。
@@ -111,18 +111,18 @@ export function defaultAcceptance(d: ProjectDefaults): string {
 }
 
 /**
- * Wait for the agent to become idle, bounded by timeoutMs.
- * SDK 的 `ctx.waitForIdle()` 签名无超时参数（agent-session.d.ts），
- * 直接传入会静默忽略，这里用 race 实现真实超时。
- * 超时后抛出 Error，由调用方自行决定 fallback。
+ * 轮询直到回调返回非空/非 undefined，或超时。
+ * 用于替代 "sendUserMessage 后再 waitForIdle" 的不可靠时序：
+ * waitForIdle 可能在消息触发的新 turn 开始前立即返回，导致误判完成。
  */
-export async function waitForIdleWithTimeout(ctx: ExtensionCommandContext, timeoutMs: number): Promise<void> {
-	await Promise.race([
-		ctx.waitForIdle(),
-		new Promise<never>((_resolve, reject) =>
-			setTimeout(() => reject(new Error(`等待代理完成超时 (${Math.round(timeoutMs / 1000)}s)`)), timeoutMs),
-		),
-	]);
+export async function pollFor<T>(poll: () => T | undefined | null, timeoutMs: number, intervalMs = 2_000): Promise<T | undefined> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const value = poll();
+		if (value !== undefined && value !== null && value !== "") return value;
+		await new Promise((r) => setTimeout(r, intervalMs));
+	}
+	return undefined;
 }
 
 /**
@@ -130,12 +130,10 @@ export async function waitForIdleWithTimeout(ctx: ExtensionCommandContext, timeo
  * Used as fallback when the agent did not write the expected file.
  */
 export function getLastAssistantTextAfter(ctx: ExtensionCommandContext, afterMs: number): string {
-	const leafId = ctx.sessionManager.getLeafId();
-	if (!leafId) return "";
 	try {
-		const branch = ctx.sessionManager.getBranch(leafId);
+		const entries = ctx.sessionManager.getEntries();
 		let text = "";
-		for (const entry of branch) {
+		for (const entry of entries) {
 			if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
 			const ts = new Date(entry.timestamp).getTime();
 			if (ts > afterMs) {

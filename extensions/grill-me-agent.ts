@@ -29,7 +29,7 @@ import {
 	type SelectItem,
 } from "@earendil-works/pi-tui";
 import { uiSelect, uiConfirm, uiInput } from "./ui-helpers";
-import { waitForIdleWithTimeout, getLastAssistantTextAfter } from "./session-utils";
+import { pollFor, getLastAssistantTextAfter } from "./session-utils";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -341,7 +341,6 @@ export interface GrillOptions {
 	title?: string;
 	description?: string;
 	questionTitle?: string;
-	loaderLabel?: string;
 }
 
 /**
@@ -368,7 +367,6 @@ export async function runGrillPhase(
 	const confirmTitle = options?.title ?? "🔍 设计方案追问完善";
 	const confirmDesc = options?.description ?? "AI 会通过系统性追问帮你打磨方案：从术语精确化到边界条件验证，确保架构决策的每个分支都经过推敲。";
 	const qTitlePrefix = options?.questionTitle ?? "设计方案追问完善";
-	const loaderLabel = options?.loaderLabel ?? "🧠 AI 正在分析代码并生成追问问题...";
 
 	// ── Step 1: Confirm entering grill mode ──────────────────
 	const enterGrill = await uiConfirm(ctx, confirmTitle, confirmDesc);
@@ -385,18 +383,16 @@ export async function runGrillPhase(
 	].join("\n\n");
 
 	// ── Step 3: Ask current agent to generate questions ──────
+	ctx.ui.notify("🧠 已提交给当前代理生成追问问题，请稍候...", "info");
 	const sentAt = Date.now();
 	pi.sendUserMessage(enhancedPrompt, { deliverAs: "followUp" });
-	try {
-		await waitForIdleWithTimeout(ctx, 5 * 60_000);
-	} catch {
-		// Agent may have failed; fall back to whatever was written
-	}
 
-	let questions = readQuestionsFromFile(outputFilePath);
-	if (questions.length === 0) {
-		questions = parseGrillQuestions(getLastAssistantTextAfter(ctx, sentAt));
-	}
+	const questions = (await pollFor(() => {
+		const qs = readQuestionsFromFile(outputFilePath);
+		if (qs.length) return qs;
+		const parsed = parseGrillQuestions(getLastAssistantTextAfter(ctx, sentAt));
+		return parsed.length ? parsed : undefined;
+	}, 5 * 60_000)) || [];
 
 	// ── Step 4: Retry dialog if no questions generated ──────
 	if (questions.length === 0) {
@@ -448,14 +444,13 @@ export async function runGrillPhase(
 
 				const retrySentAt = Date.now();
 				pi.sendUserMessage(retryPrompt, { deliverAs: "followUp" });
-				try {
-					await waitForIdleWithTimeout(ctx, 5 * 60_000);
-				} catch { /* ignore */ }
 
-				let retryQuestions = readQuestionsFromFile(retryPath);
-				if (retryQuestions.length === 0) {
-					retryQuestions = parseGrillQuestions(getLastAssistantTextAfter(ctx, retrySentAt));
-				}
+				const retryQuestions = (await pollFor(() => {
+					const qs = readQuestionsFromFile(retryPath);
+					if (qs.length) return qs;
+					const parsed = parseGrillQuestions(getLastAssistantTextAfter(ctx, retrySentAt));
+					return parsed.length ? parsed : undefined;
+				}, 5 * 60_000)) || [];
 				if (retryQuestions.length === 0) {
 					return defaultResult;
 				}
@@ -746,20 +741,18 @@ export async function runPRDPhase(
 		"不要在聊天中输出全文，只需确认写入完成。",
 	].join("\n");
 
+	ctx.ui.notify("📝 已提交给当前代理生成 PRD，请稍候...", "info");
 	const sentAt = Date.now();
 	pi.sendUserMessage(prdTask, { deliverAs: "followUp" });
-	try {
-		await waitForIdleWithTimeout(ctx, 5 * 60_000);
-	} catch { /* ignore */ }
 
-	let prdContent = "";
-	try {
-		prdContent = fs.readFileSync(fullPath, "utf-8").trim();
-	} catch { /* file not written yet */ }
-
-	if (!prdContent) {
-		prdContent = getLastAssistantTextAfter(ctx, sentAt);
-	}
+	const prdContent = (await pollFor(() => {
+		let c = "";
+		try {
+			c = fs.readFileSync(fullPath, "utf-8").trim();
+		} catch { /* file not written yet */ }
+		if (c) return c;
+		return getLastAssistantTextAfter(ctx, sentAt) || undefined;
+	}, 5 * 60_000)) || "";
 
 	if (!prdContent || prdContent.length < 50) {
 		ctx.ui.notify("❌ PRD 生成失败：未获取到有效 PRD 内容，请查看当前代理的回复后重试。", "error");
