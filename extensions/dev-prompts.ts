@@ -775,31 +775,16 @@ export default function (pi: ExtensionAPI) {
 			ctx,
 			"🔍 检测到审查意图",
 			[
-				"1. 后台审查(非阻塞,异步通知)",
-				"2. 仅审查(阻塞,等待结果)",
-				"3. 不是审查(放行给主代理)",
+				"1. 开始审查（阻塞，等待结果）",
+				"2. 不是审查（放行给主代理）",
 			],
 		);
 
-		if (!mode || mode.startsWith("3")) {
+		if (!mode || mode.startsWith("2")) {
 			return { action: "continue" };
 		}
 
-		const isAsync = mode.startsWith("1");
-
-		if (isAsync) {
-			ctx.ui.notify("🔍 已在后台启动代码审查，完成后会在此对话中通知您。", "info");
-			// Run in the background without blocking the main conversation.
-			(async () => {
-				try {
-					await runReview(event.text, ctx, pi);
-				} catch (err) {
-					console.error("[dev-prompts] Background review failed:", err);
-				}
-			})();
-		} else {
-			await runReview(event.text, ctx, pi);
-		}
+		await runReview(event.text, ctx, pi);
 
 		return { action: "handled" };
 	});
