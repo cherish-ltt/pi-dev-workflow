@@ -4,7 +4,7 @@
   "keywords": [
     "pi-package"
   ],
-  "description": "Developer workflow toolkit for pi: git agents, code review, Karpathy guidelines, themes",
+  "description": "Developer workflow toolkit for pi: git commands, code review, Karpathy guidelines, themes",
   "homepage": "https://github.com/cherish-ltt/pi-dev-workflow#readme",
   "bugs": {
     "url": "https://github.com/cherish-ltt/pi-dev-workflow/issues"
