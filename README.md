@@ -66,7 +66,7 @@ pi-package/
 | **rpiv-todo** | 模型待办清单：实时悬浮面板展示，`/reload` 与会话压缩后依然保留 | `pi install npm:@juicesharp/rpiv-todo` |
 | **@plannotator/pi-extension** | 交互式方案评审扩展：带注释的方案审查，可标注 Agent 消息，审查代码/PR | `pi install npm:@plannotator/pi-extension` |
 | **pi-permission-system** | 权限管理系统 | `pi install npm:@gotgenes/pi-permission-system` |
-| **pi-web-ui** | 浏览器控制舱（集聊天、代码、文件、终端、Git于一体） | `pi install npm:pi-web-ui` |
+| **pi-web** |  pi-web 界面(更直观便捷) | `npm install -g @agegr/pi-web@latest` 使用`pi-web`启动 |
 
 
 
