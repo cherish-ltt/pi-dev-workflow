@@ -65,6 +65,10 @@ pi-package/
 | **rpiv-ask-user-question** | 结构化问卷扩展：模型不确定时以带类型的选项向你提问，替代自由文本回复 | `pi install npm:@juicesharp/rpiv-ask-user-question` |
 | **rpiv-todo** | 模型待办清单：实时悬浮面板展示，`/reload` 与会话压缩后依然保留 | `pi install npm:@juicesharp/rpiv-todo` |
 | **@plannotator/pi-extension** | 交互式方案评审扩展：带注释的方案审查，可标注 Agent 消息，审查代码/PR | `pi install npm:@plannotator/pi-extension` |
+| **pi-permission-system** | 权限管理系统 | `pi install npm:@gotgenes/pi-permission-system` |
+| **pi-web-ui** | 浏览器控制舱（集聊天、代码、文件、终端、Git于一体） | `pi install npm:pi-web-ui` |
+
+
 
 ## Git 命令
 
