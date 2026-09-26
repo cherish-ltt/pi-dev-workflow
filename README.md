@@ -1,3 +1,5 @@
+
+
 # @ghyper9023/pi-dev-workflow
 
 > Developer workflow toolkit for [pi coding agent](https://pi.dev/): git commands, code review, Karpathy guidelines, themes, prompt wizards
@@ -25,7 +27,7 @@ pi-package/
 ├── README.md                        # 本文件
 ├── .gitignore
 ├── prompts/
-│   ├── APPEND_SYSTEM.md             # 全局追加提示：强制使用简体中文+英文专业名词
+│   ├── APPEND_SYSTEM.md             # 全局追加提示：默认使用简体中文+英文专业名词
 │   ├── review-commit.md             # 审查 commit 的提示模板
 │   └── review-diff.md              # 审查 diff 的提示模板
 ├── skills/
