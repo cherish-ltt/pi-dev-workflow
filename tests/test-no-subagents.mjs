@@ -129,6 +129,9 @@ console.log("\n📋 grill-me-agent.ts\n");
 
 assertNotIncludes("extensions/grill-me-agent.ts", "./sub-agents", "不再引入 sub-agents");
 assertNotIncludes("extensions/grill-me-agent.ts", "spawnSubagent", "不再 spawn 子进程");
+assertNotIncludes("extensions/grill-me-agent.ts", "recoverFromBackup", "断点恢复随向导一并移除");
+assertIncludes("extensions/grill-me-agent.ts", 'registerCommand("grill"', "注册独立 /grill 命令");
+assertIncludes("extensions/grill-me-agent.ts", 'registerCommand("prd"', "注册独立 /prd 命令");
 assertIncludes("extensions/grill-me-agent.ts", "pollFor", "轮询等待当前代理产物后读取结果");
 assertIncludes("extensions/grill-me-agent.ts", "GRILL_ANSWERS_DIRNAME = \"answers\"", "保留 answers 子目录");
 assertIncludes("extensions/grill-me-agent.ts", "GRILL_QUESTIONS_DIRNAME = \"questions\"", "保留 questions 子目录");

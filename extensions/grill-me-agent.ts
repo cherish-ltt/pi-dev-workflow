@@ -1,9 +1,13 @@
 /**
- * grill-me-agent.ts — 设计 (Grill) 和 PRD 生成的管理器（运行在当前代理中）
+ * grill-me-agent.ts — 设计追问（Grill）与 PRD 生成的运行时（运行在当前代理中）
  *
  * 职责：
- *   1. runGrillPhase()  — 由当前代理生成评审问题，TUI 逐题呈现（选项 + 自定义输入）
- *   2. runPRDPhase()    — 由当前代理生成 PRD，保存到 .pi-dev-output/pi-prd/
+ *   1. 注册 /grill 命令 — 对方案做追问式打磨，问答附到方案后交给当前代理
+ *   2. 注册 /prd 命令   — 按需求描述生成 PRD，保存到 .pi-dev-output/pi-prd/
+ *   3. runGrillPhase()  — 由当前代理生成评审问题，TUI 逐题呈现（选项 + 自定义输入）
+ *   4. runPRDPhase()    — 由当前代理生成 PRD，并询问是否立即开始开发
+ *
+ * 两个命令各自独立，不依附于 /dev-* 命令。
  *
  * 与旧版的区别：不再创建隔离的子代理进程，而是把追问/PRD 任务交给当前代理执行。
  * 当前模型普遍具备 >=1M 上下文窗口，无需通过子代理隔离上下文。
@@ -28,7 +32,7 @@ import {
 	wrapTextWithAnsi,
 	type SelectItem,
 } from "@earendil-works/pi-tui";
-import { uiSelect, uiConfirm, uiInput } from "./ui-helpers";
+import { uiSelect, uiConfirm, uiInput, uiTaskArg } from "./ui-helpers";
 import { pollFor, getLastAssistantTextAfter } from "./session-utils";
 
 // ── Types ────────────────────────────────────────────────────
@@ -101,25 +105,6 @@ export function saveAnswerFile(cwd: string, content: string): string {
 	const filename = `answer-${ts}-${formatTimestamp()}.md`;
 	fs.writeFileSync(path.join(dir, filename), content, "utf-8");
 	return path.join(DEV_OUTPUT_DIR, GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME, filename);
-}
-
-/**
- * Find the most recent answer backup file and read its content.
- * Returns undefined if no backup exists or read fails.
- */
-export function recoverFromBackup(cwd: string): string | undefined {
-	const dir = path.join(cwd, DEV_OUTPUT_DIR, GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME);
-	try {
-		if (!fs.existsSync(dir)) return undefined;
-		const files = fs.readdirSync(dir)
-			.filter(f => f.startsWith("answer-") && f.endsWith(".md"))
-			.map(f => ({ name: f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
-			.sort((a, b) => b.mtime - a.mtime);
-		if (files.length === 0) return undefined;
-		return fs.readFileSync(path.join(dir, files[0].name), "utf-8");
-	} catch {
-		return undefined;
-	}
 }
 
 /** Generate a safe PRD filename. */
@@ -830,12 +815,62 @@ async function askDevelopmentStart(
 	}
 }
 
-// ── Extension factory (required by pi extension loader) ─────
-//
-// This file lives in extensions/ so pi will attempt to load it.
-// The default export satisfies the loader; the real functionality
-// is consumed by dev-prompts.ts via named imports.
-//
-export default function (_pi: ExtensionAPI) {
-	// grill-me-agent is a helper module, not a standalone extension.
+// ── Extension factory ────────────────────────────────────
+
+export default function (pi: ExtensionAPI) {
+	pi.registerCommand("grill", {
+		description: "(grill) 提交前追问式打磨方案 — AI 逐题追问，问答附到方案后交给当前代理执行",
+		handler: async (args, ctx) => {
+			if (!ctx.hasUI) {
+				ctx.ui.notify("/grill 需要交互式界面", "error");
+				return;
+			}
+
+			const plan = await uiTaskArg(
+				ctx,
+				args,
+				"待打磨的方案 / 任务描述（必填）",
+				"如 实现邮箱密码登录：注册、登录、会话保持",
+			);
+			if (!plan) return;
+
+			const result = await runGrillPhase(plan, ctx, pi, {
+				title: "方案追问完善",
+				description: "AI 会针对方案逐题追问：术语精确化、边界条件、失败路径、验证方式。",
+				questionTitle: "方案追问完善",
+			});
+			if (result.cancelled) {
+				ctx.ui.notify("已取消追问，未发送任何内容", "info");
+				return;
+			}
+			if (result.pairs.length === 0) {
+				ctx.ui.notify("未进入追问，未发送任何内容", "info");
+				return;
+			}
+
+			saveAnswerFile(ctx.cwd, result.enhancedPrompt);
+			pi.sendUserMessage(result.enhancedPrompt, { deliverAs: "followUp" });
+			ctx.ui.notify("追问完成，方案已发送给当前代理", "info");
+		},
+	});
+
+	pi.registerCommand("prd", {
+		description: "(prd) 按需求描述生成 PRD 文档，并可选直接开始开发",
+		handler: async (args, ctx) => {
+			if (!ctx.hasUI) {
+				ctx.ui.notify("/prd 需要交互式界面", "error");
+				return;
+			}
+
+			const requirement = await uiTaskArg(
+				ctx,
+				args,
+				"PRD 需求描述（必填）",
+				"如 支持邮箱密码注册登录，含密码重置",
+			);
+			if (!requirement) return;
+
+			await runPRDPhase(requirement, requirement.split("\n")[0] || "feature", pi, ctx);
+		},
+	});
 }
