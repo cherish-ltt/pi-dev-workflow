@@ -35,6 +35,8 @@
 ## 🔗 Commit History
 
 ```
+bbb66f2 docs: 更新 README 与 v0.8.0 版本说明
 95b1b39 test: 补充 /dev-pre-check 的回归断言
 23f7334 feat: 新增 /dev-pre-check 命令，执行前先复述确认任务意图
+chore: bump version to 0.8.0（本次提交）
 ```
