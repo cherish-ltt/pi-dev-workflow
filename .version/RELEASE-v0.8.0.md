@@ -48,6 +48,7 @@
 ### README 同步
 
 - 推荐扩展表新增 `pi-permission-system`、`pi-web`
+- 目录树中 `APPEND_SYSTEM.md` 的说明由「强制使用简体中文」修正为「默认使用简体中文」（社区 PR #9）
 - dev 命令一节重写为 4 命令设计（参数即任务、流程、提示词结构）；Grill / PRD 改为独立命令 `/grill`、`/prd` 的说明
 - 目录树补充 `review-detect.ts`、`session-utils.ts`
 - FAQ 重写：交互轮次、与 `/dev-pre-check` 的关系、验收标准优先级、提示词存放位置
@@ -75,6 +76,7 @@
 ## 🔗 Commit History
 
 ```
+725c605 docs: improve README（社区 PR #9）
 53eb82d fix: git 命令完成通知改用合法 notify 类型
 7092c95 feat: 添加对项目已有验证约束的识别指导
 02aab6b docs: 更新 README 至新 dev 命令设计
