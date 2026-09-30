@@ -22,16 +22,12 @@
  * Leave a field empty (Enter) to skip its section.
  * Press Esc to cancel the entire wizard.
  *
- * Review detection: inputs mentioning review/审查 + code/diff are automatically
- * handled by the review-html skill, running in the current agent.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { runGrillPhase, runPRDPhase, saveAnswerFile, recoverFromBackup, type GrillOptions } from "./grill-me-agent";
 import { detectProjectDefaults, defaultAcceptance, type ProjectDefaults } from "./session-utils";
-import { uiSelect, uiConfirm, uiInput, BACK_MARKER } from "./ui-helpers";
+import { uiInput, BACK_MARKER } from "./ui-helpers";
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -74,69 +70,6 @@ function isEmpty(val: string | undefined): boolean {
 function wrap(val: string | undefined, fallback = "..."): string {
 	if (isEmpty(val)) return fallback;
 	return val!.trim();
-}
-
-// ── Review helper ────────────────────────────────────────────
-
-/** Find the newest HTML review file generated after `afterMs`（忽略先前遗留的旧报告）。 */
-function findNewestReviewHtml(cwd: string, afterMs: number): string {
-	const candidates = [
-		path.join(cwd, ".pi-dev-output", "pi-review", "html"),
-		path.join(cwd, "pi-review"),
-		path.join(cwd, ".pi-dev-output", "pi-review"),
-	];
-
-	for (const reviewDir of candidates) {
-		try {
-			if (fs.existsSync(reviewDir)) {
-				const files = fs.readdirSync(reviewDir)
-					.filter(f => f.endsWith(".html"))
-					.map(f => ({
-						name: f,
-						mtime: fs.statSync(path.join(reviewDir, f)).mtimeMs,
-					}))
-					.filter(f => f.mtime > afterMs)
-					.sort((a, b) => b.mtime - a.mtime);
-				if (files.length > 0) {
-					const rel = path.relative(cwd, reviewDir);
-					return rel + "/" + files[0].name;
-				}
-			}
-		} catch {
-			// ignore fs errors
-		}
-	}
-
-	return "";
-}
-
-/** Run a code review in the current agent and report the result. */
-async function runReview(task: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<string | undefined> {
-	const startTime = Date.now();
-	ctx.ui.notify("🤖 正在运行代码审查，请稍候...", "info");
-
-	pi.sendUserMessage(`/skill:review-html\n\n${task}`, {
-		deliverAs: "followUp",
-		expandPromptTemplates: true,
-	});
-
-	// 以“报告文件生成为完成标志”进行轮询；不使用 waitForIdle，
-	// 避免其在 sendUserMessage 触发的新 turn 开始前立即返回，导致误报“已完成”。
-	const deadline = Date.now() + 10 * 60_000;
-	let filePath = "";
-	while (Date.now() < deadline) {
-		filePath = findNewestReviewHtml(ctx.cwd, startTime);
-		if (filePath) break;
-		await new Promise((r) => setTimeout(r, 2_000));
-	}
-
-	const dur = ((Date.now() - startTime) / 1000).toFixed(1);
-	if (filePath) {
-		ctx.ui.notify(`📄 审查报告已生成: ${filePath} (${dur}s)`, "success");
-	} else {
-		ctx.ui.notify(`⚠️ 审查未生成报告 (${dur}s)，请查看当前代理的回复或稍后重试`, "warning");
-	}
-	return filePath;
 }
 
 // ── Template Assemblers ──────────────────────────────────────
@@ -744,51 +677,6 @@ const COMPARE_QUESTIONS: WizardQuestion[] = [
 // ── Extension ────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-	// ── Auto review detection (runs in the current agent) ─────────
-	pi.on("input", async (event, ctx) => {
-		if (!ctx.hasUI) return { action: "continue" };
-		// 扩展注入的消息（sendUserMessage，source 为 "extension"）不重入本处理器，避免无限递归
-		if (event.source === "extension") return { action: "continue" };
-
-		const text = event.text.trim().toLowerCase();
-
-		// Detect review-html skill invocation or explicit review request.
-		const isReviewSkill = text.startsWith("/skill:review-html");
-		const hasReviewIntent = text.includes("review") ||
-			text.includes("审查") || text.includes("审阅") || text.includes("review-html");
-		const hasCodeTarget = text.includes("code") || text.includes("代码") ||
-			text.includes("diff") || text.includes("commit") ||
-			text.includes("html") || text.includes("report") || text.includes("报告") ||
-			text.includes("本次改动") || text.includes("这次改动");
-		const isReviewRequest = !isReviewSkill && hasReviewIntent && hasCodeTarget;
-
-		if (!isReviewSkill && !isReviewRequest) return { action: "continue" };
-
-		// ── Skill invocation: run review directly ─────────────────
-		if (isReviewSkill) {
-			await runReview(event.text, ctx, pi);
-			return { action: "handled" };
-		}
-
-		// ── Review intent: let the user choose ────────────────────
-		const mode = await uiSelect(
-			ctx,
-			"🔍 检测到审查意图",
-			[
-				"1. 开始审查（阻塞，等待结果）",
-				"2. 不是审查（放行给主代理）",
-			],
-		);
-
-		if (!mode || mode.startsWith("2")) {
-			return { action: "continue" };
-		}
-
-		await runReview(event.text, ctx, pi);
-
-		return { action: "handled" };
-	});
-
 	// ── /dev-feat ──────────────────────────────────────────────
 	pi.registerCommand("dev-feat", {
 		description: "(prompt wizard) 新功能/创意生成 — 支持设计方案追问完善 (Grill)",

@@ -10,7 +10,7 @@
  *   - uiInput()      — replaces ctx.ui.input() with wrapping
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
     Box,
     Container,
@@ -28,7 +28,7 @@ import { Key, matchesKey } from "@earendil-works/pi-tui";
 
 // ── Types ────────────────────────────────────────────────────
 
-type Theme = ExtensionCommandContext["ui"]["theme"];
+type Theme = ExtensionContext["ui"]["theme"];
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ function dim(theme: Theme, text: string): string {
  * caller should check for it via choice === BACK_OPTION_TEXT.
  */
 export function uiSelect(
-    ctx: ExtensionCommandContext,
+    ctx: ExtensionContext,
     title: string,
     items: string[],
     backable = false,
@@ -136,7 +136,7 @@ export function uiSelect(
  * Returns true for Yes, false for No, "back" for back, undefined on cancel.
  */
 export function uiConfirm(
-    ctx: ExtensionCommandContext,
+    ctx: ExtensionContext,
     title: string,
     message?: string,
     backable = false,
@@ -210,7 +210,7 @@ export function uiConfirm(
  * When backable=true, supports Ctrl+Shift+← for back and Ctrl+Shift+→ for submit+next.
  */
 export function uiInput(
-    ctx: ExtensionCommandContext,
+    ctx: ExtensionContext,
     label: string,
     placeholder?: string,
     required = false,

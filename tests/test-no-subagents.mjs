@@ -67,11 +67,22 @@ assertNotIncludes("extensions/dev-prompts.ts", "./workflow-engine", "不再引�
 assertNotIncludes("extensions/dev-prompts.ts", "runWorkflow", "不再调用 runWorkflow");
 assertNotIncludes("extensions/dev-prompts.ts", "discoverAgents", "不再自动发现 agent");
 assertNotIncludes("extensions/dev-prompts.ts", "WORKFLOW_STEPS", "不再定义工作流步骤链");
-assertIncludes("extensions/dev-prompts.ts", "event.source === \"extension\"", "过滤扩展注入消息，防止递归");
-assertIncludes("extensions/dev-prompts.ts", "expandPromptTemplates: true", "skill 命令展开执行");
 assertIncludes("extensions/dev-prompts.ts", "pi.sendUserMessage(finalPrompt", "组装后的提示词直接发送给当前代理");
 assertIncludes("extensions/dev-prompts.ts", "saveAnswerFile(ctx.cwd, finalPrompt)", "保留提示词持久化");
 assertIncludes("extensions/dev-prompts.ts", "recoverFromBackup(ctx.cwd)", "保留断点恢复");
+
+// ═══════════════════════════════════════════════════════════════
+//  2b. 自动审查检测独立为 review-detect.ts
+// ═══════════════════════════════════════════════════════════════
+
+console.log("\n📋 review-detect.ts\n");
+
+assertExists("extensions/review-detect.ts", "自动审查检测独立成扩展");
+assertNotIncludes("extensions/review-detect.ts", "./sub-agents", "不再引入 sub-agents");
+assertIncludes("extensions/review-detect.ts", 'pi.on("input"', "拦截带审查意图的输入");
+assertIncludes("extensions/review-detect.ts", 'event.source === "extension"', "过滤扩展注入消息，防止递归");
+assertIncludes("extensions/review-detect.ts", "expandPromptTemplates: true", "skill 命令展开执行");
+assertIncludes("extensions/review-detect.ts", '"pi-review"', "自动审查仍查找 pi-review/ 输出目录");
 
 // ═══════════════════════════════════════════════════════════════
 //  3. Git 命令直接执行，不再委派给子代理
@@ -122,7 +133,6 @@ const reviewSkill = fs.readFileSync(path.resolve(ROOT, "skills/review-html/SKILL
 assertIncludes("skills/review-html/SKILL.md", ".pi-dev-output/pi-review/html/", "review-html 仍写入 pi-review/html/");
 
 const devPrompts = fs.readFileSync(path.resolve(ROOT, "extensions/dev-prompts.ts"), "utf-8");
-assertIncludes("extensions/dev-prompts.ts", "\"pi-review\"", "自动审查仍查找 pi-review/ 输出目录");
 assertIncludes("extensions/session-utils.ts", "detectProjectDefaults", "项目探测（语言/测试/lint/pre-commit/CI）");
 assertIncludes("extensions/session-utils.ts", "defaultAcceptance", "生成默认验收标准");
 assertIncludes("extensions/dev-prompts.ts", "applyDefaults", "未填字段注入默认值");
