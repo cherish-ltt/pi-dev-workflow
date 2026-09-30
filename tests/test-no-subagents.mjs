@@ -131,6 +131,24 @@ assertIncludes("extensions/dev-prompts.ts", "WizardQuestion", "提问结构支�
 assertIncludes("extensions/dev-prompts.ts", "assignAnswers", "提问支持单值/多字段填写");
 
 // ═══════════════════════════════════════════════════════════════
+//  7. /dev-pre-check 独立意图校验扩展
+// ═══════════════════════════════════════════════════════════════
+
+console.log("\n📋 pre-check.ts\n");
+
+assertExists("extensions/pre-check.ts", "提供独立的 pre-check 扩展");
+assertIncludes("extensions/pre-check.ts", 'registerCommand("dev-pre-check"', "注册 /dev-pre-check 命令");
+assertIncludes("extensions/pre-check.ts", "用自己的话重述你认为用户的目标是什么，以及用户试图解决的问题是什么", "固定指令：用自己的话重述目标与问题");
+assertIncludes("extensions/pre-check.ts", "[pre-check] 任务意图校验：只复述，不执行", "意图校验提示词声明只复述不执行");
+assertIncludes("extensions/pre-check.ts", "禁止修改、创建、删除任何文件", "约束禁止任何实质改动");
+assertIncludes("extensions/pre-check.ts", "pi.sendUserMessage(buildExecutionPrompt", "确认通过后才发送执行提示词");
+assertIncludes("extensions/pre-check.ts", "buildExecutionPrompt(originalPrompt: string, intent: string)", "执行提示词携带已确认的意图复述");
+assertIncludes("extensions/pre-check.ts", "ctx.isIdle()", "以代理空闲作为复述完成信号之一");
+assertIncludes("extensions/pre-check.ts", "pollFor", "轮询等待复述产物");
+assertNotIncludes("extensions/pre-check.ts", "./dev-prompts", "不依赖 /dev-* 向导实现");
+assertNotIncludes("extensions/dev-prompts.ts", "dev-pre-check", "dev-prompts 不受 pre-check 影响");
+
+// ═══════════════════════════════════════════════════════════════
 //  Summary
 // ═══════════════════════════════════════════════════════════════
 
