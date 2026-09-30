@@ -1,6 +1,6 @@
 # @ghyper9023/pi-dev-workflow
 
-> Developer workflow toolkit for [pi coding agent](https://pi.dev/): git commands, code review, Karpathy guidelines, themes, prompt wizards
+> Developer workflow toolkit for [pi coding agent](https://pi.dev/): git commands, code review, dev commands, Karpathy guidelines, themes
 
 ## 快速安装
 
@@ -39,10 +39,12 @@ pi-package/
 │       └── SKILL.md                 # 从对话上下文生成 PRD 文档
 ├── extensions/
 │   ├── append-system.ts             # 追加 APPEND_SYSTEM.md 提示词
-│   ├── dev-prompts.ts               # 提示词优化向导（/dev-* 命令）
+│   ├── dev-prompts.ts               # dev 命令（/dev-feat、/dev-fix、/dev-refactor、/dev-test）
 │   ├── git-commands.ts              # git 命令（直接执行）
-│   ├── grill-me-agent.ts            # Grill + PRD 运行时（运行在当前代理中）
-│   ├── pre-check.ts                 # 意图预检（/dev-pre-check）
+│   ├── grill-me-agent.ts            # /grill 与 /prd 命令 + 运行时（运行在当前代理中）
+│   ├── pre-check.ts                 # 意图校验（/dev-pre-check + 共享的 confirmIntent）
+│   ├── review-detect.ts             # 自动审查意图检测
+│   ├── session-utils.ts             # 项目探测、验收标准、轮询等待
 │   └── ui-helpers.ts                # TUI 组件构建器（Select/Confirm/Input）
 └── themes/
     └── claude-code-theme.json       # Claude Code CLI 风格主题
@@ -106,123 +108,100 @@ pi-package/
 
 5. **开始工作** — 已确认的意图复述作为权威前提一并发给代理，与其理解冲突时以该复述为准
 
-### 与其他 /dev-* 命令的关系
+### 与其他 dev 命令的关系
 
-`/dev-pre-check` 是独立设计的流程，不依赖 `/dev-*` 向导、Grill 追问或 PRD 生成，也不受其运作方式影响——它只做「执行前对齐意图」这一件事。
+`/dev-pre-check` 只做「执行前对齐意图」这一件事，可独立用于任意任务。
 
-## Dev Prompts（提示词优化向导）
+`/dev-feat` 等 dev 命令内部复用同一套意图复述指令（`confirmIntent`）：发送提示词前先让你确认意图，但提示词组装、默认验收标准填充由它们自己完成，不依赖 `/dev-pre-check` 命令本身。
 
-基于 [ai提示词优化.md](./ai%E6%8F%90%E7%A4%BA%E8%AF%8D%E4%BC%98%E5%8C%96.md) 中的优质模板，通过交互式问答引导你填写 `[xxx]` 占位符，组装完整的高质量提示词后**直接投递给当前代理执行**。
+## Dev 命令
 
-### 命令一览
+四个命令对应四类高频任务。**命令参数就是任务原文**，不带参数时才弹一次输入框；其余信息（项目语言、测试命令、lint 命令、pre-commit/CI）由项目探测自动补齐。
 
-| 命令 | 用途 | 对应模板类型 | 支持 Grill |
-|------|------|-------------|---------|
-| `/dev-feat` | 新功能/创意生成 | `feat` | ✅ |
-| `/dev-fix` | 问题排查/错误修正 | `fix` | ✅ |
-| `/dev-doc` | 文档生成/总结 | `doc` | ✅ |
-| `/dev-refactor` | 重构/优化现有结构 | `refactor` | ✅ |
-| `/dev-test` | 测试用例生成 | `test` | ✅ |
-| `/dev-perf` | 性能优化 | `perf` | ✅ |
-| `/dev-style` | 风格/格式调整 | `style` | ✅ |
-| `/dev-security` | 安全审查 | `security` | ✅ |
-| `/dev-chore` | 日常维护/自动化 | `chore` | ❌ |
-| `/dev-explain` | 概念解释 | `explain` | ❌ |
-| `/dev-compare` | 对比评估 | `compare` | ❌ |
+| 命令 | 用途 | 提示词中的身份 |
+|------|------|---------------|
+| `/dev-feat` | 新功能实现 | 资深 <项目语言> 工程师 |
+| `/dev-fix` | 问题修复 | 资深 <项目语言> 调试工程师 |
+| `/dev-refactor` | 重构 | 资深 <项目语言> 工程师 |
+| `/dev-test` | 测试补充 | 资深测试工程师 |
 
-### 使用方法
-
-输入任意 `/dev-*` 命令进入向导，按提示逐项填写字段：
+### 流程
 
 ```text
-# 示例：/dev-feat
-📋 /dev-feat — 新功能/创意生成，请逐项填写以下信息（留空跳过对应段落，Esc 取消）
-
-编程语言/框架？ TypeScript
-技术栈？ NestJS + Prisma
-目标模块/文件名？ src/auth/login.ts
-核心功能描述？ 用户可以通过邮箱+密码注册并登录
-...
-✅ 提示词已组装完成，正在发送给当前代理...
+/dev-feat 实现邮箱密码登录接口
+   │
+   ├─ 1. 任务原文：取命令参数，或弹一次必填输入框
+   ├─ 2. 意图确认：代理复述「目标 / 问题 / 不确定之处」，你确认
+   │      选「否」→ 输入补充说明 → 重新复述（可循环）
+   │      取消 / Esc → 不产生任何改动
+   ├─ 3. 组装提示词（见下）
+   └─ 4. 发送给当前代理执行
 ```
 
-**交互规则**：
-- **留空（直接回车）** — 该字段标记为「无」，对应的模板段落整段跳过
-- **输入「无」** — 与留空效果相同，明确表示不需要该段内容
-- **按 Esc** — 随时退出向导，不产生任何输出
-- **填写后** — 自动用 `pi.sendUserMessage()` 投递给当前代理，立即开始执行
-- 向导会自动将组装好的提示词保存到 `.pi-dev-output/pi-grill/answers/`，中断后可恢复
+### 提示词结构
 
-### 示例 1：用 `/dev-fix` 修 Bug
+组装出的提示词只补两件事：AI 的身份与职责、未说明验收标准时的默认收尾验收标准。任务目标直接取第 2 步已确认的意图，这里不再重新解释需求。
+
+```markdown
+[dev-feat] 实现邮箱密码登录接口
+
+## 任务（原始描述）
+实现邮箱密码登录接口
+
+## 已确认的任务意图
+（第 2 步你确认过的复述原文）
+
+## 身份与职责
+你是资深 TypeScript 工程师。
+- 先读代码库再动手：给出逐步实施计划……
+- 只实现任务要求的功能，不顺手重构无关代码
+- 保持现有公共 API 兼容，不为假设性需求添加抽象层
+
+## 验收标准
+以下为默认收尾验收基线；任务描述中另有明确验收标准时，以任务描述为准。
+- 运行 pnpm test 确认全部测试通过、无回归
+- 运行 pnpm lint 符合代码规范
+- 通过本地 pre-commit 钩子检查
+- 通过 CI 检查
+```
+
+### 示例
 
 ```text
-/dev-fix
-文件路径？ src/api/users.ts
-行号？ 42
-Bug 描述？ 创建用户成功后返回 201，但实际上返回了 500
-输入/现象？ POST /api/users 正确参数返回 Internal Server Error
-预期行为？ 返回 201 + 用户数据
-当前错误？ 500 Internal Server Error
+/dev-fix 登录接口在密码正确时返回 401
+   ↓ 代理复述目标与问题
+   ↓ 你确认
+   ↓ 发送：任务 + 已确认意图 + 调试工程师职责 + 默认验收标准
 ```
-
-组装后的提示词包含：根因诊断 → 修复方案 → 测试复现 → diff 输出。
-
-### 示例 2：用 `/dev-doc` 写文档
 
 ```text
-/dev-doc
-模块/API 名称？ AuthService REST API
-目标受众？ 前端开发者和后端集成方
-关键信息点？ 注册、登录、刷新 token、登出四个接口的用法
-示例语言？ TypeScript, curl
-已有材料？ （留空跳过，从零生成）
+/dev-refactor
+任务描述？ 把 src/auth/login.ts 拆成参数校验和会话创建两部分
+   ↓ 同上（不带参数时弹一次输入框）
 ```
 
-组装后的提示词包含：角色（技术文档工程师）→ 大纲先行 → Markdown 层级文档 → 2 个可运行示例。
+> 早期版本的 `dev-doc`、`dev-perf`、`dev-style`、`dev-security`、`dev-chore`、`dev-explain`、`dev-compare` 已删除：它们的模板与 `/dev-feat`、`/dev-fix` 差异很小，维护成本高于收益；同类任务直接用 `/dev-feat` 或 `/dev-refactor` 描述清楚即可。
+> 需要先打磨方案再动手用独立的 `/grill`，需要先出 PRD 用独立的 `/prd`。
 
-### 示例 3：用 `/dev-feat` 走完整流程（含 Grill + PRD）
+## 方案追问完善（/grill）
+
+Grill（"追问式打磨"）是提交方案前由 AI 从多个维度追问完善设计的交互流程，现在是一个独立命令，不再挂在 `/dev-*` 后面。
 
 ```text
-/dev-feat
-编程语言/框架？ TypeScript
-技术栈？ Express + PostgreSQL + Redis
-目标模块/文件名？ src/api/payments.ts
-核心功能描述？ 用户可以通过信用卡或 PayPal 进行一次性支付
-
-→ 填写完成后，弹出确认框：
-🔍 设计方案追问完善 — 是否进入方案追问完善 (Grill) 模式？
-→ 逐题回答完毕（约 15-25 题），追问记录附加到提示词末尾。
-
-→ 弹出 PRD 确认框：
-📋 创建 PRD — 是否为此功能创建 PRD 文档？
-→ 选择"是"，PRD 保存到 .pi-dev-output/pi-prd/payments-20260519.md
-→ 最终提示词（含追问记录）发送给当前代理开始执行
+/grill 实现邮箱密码登录：注册、登录、会话保持
 ```
 
-## 方案追问完善（Grill）机制
+不带参数时弹一次输入框。
 
-Grill（"追问式打磨"）是提交方案前由 AI 从多个维度追问完善你的设计的交互流程。Grill 阶段在 `/dev-*` 向导完成后自动触发，以确认对话框询问是否进入追问完善。
-
-由于当前主流模型普遍具备 >=1M 上下文窗口，Grill 不再创建隔离的子代理进程，而是由**当前代理**执行追问任务，所有追问记录直接追加到当前会话上下文中。
-
-追问完善流程：
+流程：
 1. **确认** — 弹出对话框，选择"是"进入追问完善
 2. **生成问题** — 当前代理根据方案上下文，一次生成全部追问问题（JSON 数组）
 3. **逐题回答** — TUI 逐题展示，每道题带选项列表 + 自定义输入入口
-4. **增强提示词** — 所有 Q&A 追加到原提示词末尾，形成 `enhancedPrompt`
+4. **增强提示词** — 所有 Q&A 追加到原方案末尾，形成 `enhancedPrompt`，发送给当前代理执行
 
-### 按领域定制的 Grill 场景
+若在第 1 步选"否"，或过程中按 Esc 取消，都不会发送任何内容。
 
-不同的 `/dev-*` 命令使用不同的追问方向，问题维度与任务类型对齐：
-
-| 命令 | Grill 场景 | 追问维度 |
-|---|---|---|
-| `/dev-feat` | 设计方案追问完善 | 架构、数据流、模块边界、安全、测试策略、性能、可扩展性 |
-| `/dev-fix` | Bug 根因追问 | 复现条件、根因推理、修复方案、回归风险 |
-| `/dev-doc` | 文档大纲追问完善 | 受众定位、结构安排、示例选择 |
-| `/dev-refactor` | 重构方案追问 | 模块边界、API 兼容性、测试策略、迁移风险 |
-| `/dev-test` | 测试策略追问 | 覆盖维度、边界条件、模拟策略 |
-| `/dev-perf` | 性能优化方案追问 | 基准测试方法、优化方向、回归风险 |
+由于当前主流模型普遍具备 >=1M 上下文窗口，Grill 不再创建隔离的子代理进程，而是由**当前代理**执行追问任务，所有追问记录直接追加到当前会话上下文中。
 
 ### 交互形式
 
@@ -237,20 +216,22 @@ Grill（"追问式打磨"）是提交方案前由 AI 从多个维度追问完善
 
 ### 输入框特性
 
-自定义输入和 `/dev-*` 向导中的输入框支持：
+追问的自定义输入框与 dev 命令的任务描述输入框支持：
 - **实时换行预览**：输入超长文本时，输入框上方会显示完整的换行预览（灰色文字），实时跟随输入变化
 - **光标操作**：`←` 和 `→` 键可正常移动光标编辑已有内容（不触发返回）
 - **返回上一题**：`Ctrl+Shift+←` 在输入框中返回上一题
 - **跳过输入**：`Ctrl+Shift+→` 提交当前内容（可为空）并继续
 
-## PRD 文档生成
+## PRD 文档生成（/prd）
 
-仅 `/dev-feat` 命令在执行完成后自动触发 PRD 生成。其余 `/dev-*` 命令不包含此阶段。
+```text
+/prd 支持邮箱密码注册登录，含密码重置
+```
 
-PRD 由当前代理生成，不再使用隔离的子代理进程：
+不带参数时弹一次输入框。PRD 由当前代理生成：
 
 1. **确认** — 弹出对话框询问是否创建 PRD
-2. **生成** — 当前代理读取对话上下文 + 代码库理解，按模板生成 Markdown PRD
+2. **生成** — 当前代理读取需求描述 + 代码库理解，按模板生成 Markdown PRD
 3. **保存** — 写入 `.pi-dev-output/pi-prd/<module>-<date>.md`
 4. **后续操作** — 询问是否立即开始开发：
    - "是" — 将 PRD 作为开发指令发送给当前代理
@@ -259,7 +240,7 @@ PRD 由当前代理生成，不再使用隔离的子代理进程：
 
 PRD 模板包含：Problem Statement、Solution、User Stories、Implementation Decisions、Testing Decisions、Out of Scope、Further Notes。
 
-如果需要为其他场景生成 PRD，可以手动使用 `to-prd` skill（直接引用 `/skill:to-prd`）。
+从对话上下文生成 PRD 也可以用 `to-prd` skill（`/skill:to-prd`）。
 
 ## Skills
 
@@ -308,20 +289,26 @@ pi install git:github.com/cherish-ltt/pi-dev-workflow
 
 ## 常见问题
 
-**Q: Grill 阶段可以跳过吗？**
-A: 可以。在 Grill 确认对话框中选择"否"即可跳过，原提示词不变直接投递给当前代理。追问过程中按 Esc 也可随时取消，已回答的问题仍会附加到提示词中。
+**Q: dev 命令问几个问题？**
+A: 0 个。任务原文就是命令参数（如 `/dev-feat 实现邮箱密码登录接口`），不带参数时才弹一次必填输入框；语言、测试命令、lint 命令等由项目探测自动补齐。
 
-**Q: 所有 `/dev-*` 命令都支持 Grill 吗？**
-A: 不是。以下命令支持 Grill：`/dev-feat`、`/dev-fix`、`/dev-doc`、`/dev-refactor`、`/dev-test`、`/dev-perf`。`/dev-chore`、`/dev-style`、`/dev-security`、`/dev-explain`、`/dev-compare` 不包含 Grill 阶段。
+**Q: dev 命令与 `/dev-pre-check` 是什么关系？**
+A: 两者共用同一套意图复述指令（`extensions/pre-check.ts` 中的 `confirmIntent`），但 dev 命令自行组装提示词（身份职责 + 默认验收标准），`/dev-pre-check` 则只负责「复述 → 确认 → 执行」。可单独用 `/dev-pre-check` 校验任意任务，也可直接用 `/dev-feat` 等命令一步到位。
 
-**Q: PRD 没有自动生成怎么办？**
-A: 只有 `/dev-feat` 会在执行完成后触发 PRD 生成。其他命令不包含此阶段。如果需要为其他场景生成 PRD，可以手动使用 `to-prd` skill（直接引用 `/skill:to-prd`）。
+**Q: 验收标准会覆盖我自己写的吗？**
+A: 不会。提示词里的验收标准段明确写明「任务描述中另有明确验收标准时，以任务描述为准」，默认条目只是收尾基线。
+
+**Q: `/grill` 和 `/prd` 要在 `/dev-*` 之后运行吗？**
+A: 不需要。两者都是独立命令，任何时候都能用：`/grill <方案描述>` 做提交前追问打磨，`/prd <需求描述>` 先生成 PRD。dev 命令不再触发它们。
+
+**Q: `/grill` 中跳过或取消会怎样？**
+A: 在确认对话框选"否"或按 Esc 取消，都不会向当前代理发送任何内容。
 
 **Q: 如何自定义 Grill 的问题数量和方向？**
-A: 在 `extensions/grill-me-agent.ts` 中修改对应 Grill 场景的提示词即可控制问题方向和数量。目前各领域 Grill 的问题数量由 LLM 自主决定（典型 15-40 题）。
+A: 在 `extensions/grill-me-agent.ts` 中修改追问提示词即可控制问题方向和数量。问题数量由 LLM 自主决定（典型 15-40 题）。
 
-**Q: 追问问答是否影响原提示词？**
-A: 追问问答以「方案追问记录」区块追加到原提示词末尾，原提示词内容不变。当前代理执行时会同时参考原需求 + 追问中确认的决策。
+**Q: 追问问答是否影响原方案？**
+A: 追问问答以「方案追问记录」区块追加到原方案末尾，原方案内容不变。当前代理执行时会同时参考原方案 + 追问中确认的决策。
 
 **Q: Grill 中如何返回上一题？**
 A: 使用 `Ctrl+Shift+←` 返回上一题（在选项列表和自定义输入框中均适用）。裸 `←` 键在选项列表中无效果，在输入框中用于光标左移编辑文本。
@@ -329,11 +316,11 @@ A: 使用 `Ctrl+Shift+←` 返回上一题（在选项列表和自定义输入�
 **Q: 自定义输入框中的键位有哪些？**
 A: `Enter` 确认提交，`Esc` 取消返回选项列表，`Ctrl+Shift+←` 返回上一题，`Ctrl+Shift+→` 跳过输入并继续，方向键 `←`/`→` 用于移动光标编辑已有文本。
 
-**Q: `grill-with-docs` skill 和 `/dev-*` 内置的 Grill 有什么区别？**
-A: `grill-with-docs` 是可独立调用的 skill（`/skill:grill-with-docs`），侧重领域术语统一和文档同步（更新 CONTEXT.md、创建 ADR）。`/dev-*` 内置的 Grill 是任务向导的一部分，侧重方案追问完善，不涉及文档持久化。
+**Q: `grill-with-docs` skill 和 `/grill` 命令有什么区别？**
+A: `grill-with-docs` 是 skill（`/skill:grill-with-docs`），侧重领域术语统一和文档同步（更新 CONTEXT.md、创建 ADR）。`/grill` 侧重方案追问完善，不涉及文档持久化。
 
 **Q: 自动审查可以关闭吗？**
-A: 检测到审查意图时选择"3. 不是审查"即可放行原消息给当前代理。如果需要完全关闭，可以在 `extensions/dev-prompts.ts` 中移除 `pi.on("input")` 的审查拦截逻辑。
+A: 检测到审查意图时选择"2. 不是审查"即可放行原消息给当前代理。如果需要完全关闭，可以在 `extensions/review-detect.ts` 中移除 `pi.on("input")` 的审查拦截逻辑。
 
 **Q: Git 命令需要子代理吗？**
 A: 不需要。`/git-commit`、`/git-push`、`git-commit-push` 直接通过 pi 的内置执行器运行 git，结果会出现在当前会话中。
@@ -345,10 +332,10 @@ A: 不会。意图校验阶段的提示词明确禁止修改/创建/删除文件
 A: 等待上限为 5 分钟（信号为「代理空闲且本轮产生了新的 assistant 文本」）。超时后弹出「重试 / 取消」供你决定。
 
 **Q: `/dev-pre-check` 会触发 Grill 或 PRD 吗？**
-A: 不会。它与 `/dev-*` 向导、Grill 追问、PRD 生成完全独立，不进入任何向导流程。
+A: 不会。它与 `/grill`、`/prd` 完全独立；dev 命令也只是复用它的意图复述指令，不进入任何额外流程。
 
-**Q: 提示词保存到哪个目录？**
-A: 向导组装的提示词保存到 `.pi-dev-output/pi-grill/answers/`，Grill 生成的问题文件保存到 `.pi-dev-output/pi-grill/questions/`。中断后重新执行对应命令可从备份恢复。
+**Q: 生成的提示词保存到哪个目录？**
+A: dev 命令组装出的提示词会作为用户消息出现在当前会话中（可直接回看）；`/grill` 会把追问记录保存到 `.pi-dev-output/pi-grill/answers/`，生成的问题文件放在 `.pi-dev-output/pi-grill/questions/`。
 
 ## License
 
