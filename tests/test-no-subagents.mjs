@@ -11,10 +11,13 @@
  *   5. /grill 与 /prd 是独立命令
  *   6. UI 组件与输出目录约定
  *   7. /dev-pre-check 意图校验（confirmIntent 为共享实现）
+ *   8. notify 调用使用合法类型（info / warning / error）
+ *   9. 当前版本的 RELEASE 说明覆盖该版本区间内的全部 commit
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -174,6 +177,76 @@ assertIncludes("extensions/pre-check.ts", "pollFor", "轮询等待复述产物")
 assertNotIncludes("extensions/pre-check.ts", "./dev-prompts", "不依赖 /dev-* 命令实现");
 assertNotIncludes("extensions/pre-check.ts", "./grill-me-agent", "不依赖 Grill/PRD 运行时");
 assertNotIncludes("extensions/dev-prompts.ts", "dev-pre-check", "dev-prompts 不注册覆盖 pre-check 的命令");
+
+// ═══════════════════════════════════════════════════════════════
+//  8. notify 调用使用合法类型
+// ═══════════════════════════════════════════════════════════════
+
+console.log("\n📋 notify 类型\n");
+
+const NOTIFY_TYPES = ["info", "warning", "error"];
+const badNotify = [];
+for (const file of fs.readdirSync(path.resolve(ROOT, "extensions"))) {
+	if (!file.endsWith(".ts")) continue;
+	const lines = fs.readFileSync(path.resolve(ROOT, "extensions", file), "utf-8").split("\n");
+	for (const line of lines) {
+		const matched = line.match(/\.notify\(.*,\s*"([^"]+)"\s*\)/);
+		if (matched && !NOTIFY_TYPES.includes(matched[1])) badNotify.push(`${file} → ${matched[1]}`);
+	}
+}
+assert(
+	badNotify.length === 0,
+	badNotify.length === 0 ? "所有 notify 调用使用合法类型（info / warning / error）" : `非法 notify 类型: ${badNotify.join(", ")}`,
+);
+
+// ═══════════════════════════════════════════════════════════════
+//  9. 版本说明覆盖该版本全部 commit
+// ═══════════════════════════════════════════════════════════════
+
+console.log("\n📋 版本说明\n");
+
+function git(args) {
+	return execFileSync("git", args, { cwd: ROOT, encoding: "utf-8" }).trim();
+}
+
+const version = JSON.parse(fs.readFileSync(path.resolve(ROOT, "package.json"), "utf-8")).version;
+const releaseDoc = `.version/RELEASE-v${version}.md`;
+assertExists(releaseDoc, `存在 ${releaseDoc}`);
+
+const docText = fs.readFileSync(path.resolve(ROOT, releaseDoc), "utf-8");
+const listed = docText
+	.split("\n")
+	.map((line) => line.match(/^[0-9a-f]{7,40}\b/)?.[0])
+	.filter(Boolean);
+assert(listed.length > 0, "Commit History 至少列出一条 commit");
+
+const unknown = listed.filter((h) => {
+	try {
+		git(["rev-parse", "--verify", "--quiet", `${h}^{commit}`]);
+		return false;
+	} catch {
+		return true;
+	}
+});
+assert(unknown.length === 0, `列出的 commit 都真实存在（${unknown.join(", ") || "无缺失"}）`);
+
+// 以文档中最新的一条 commit 作为覆盖终点，避免把后续版本的提交算进本版本
+const tip = listed.reduce((a, b) =>
+	Number(git(["rev-list", "--count", a])) >= Number(git(["rev-list", "--count", b])) ? a : b,
+);
+const prevTag = git(["tag", "--merged", tip, "--sort=-v:refname"])
+	.split("\n")
+	.find((tag) => tag && tag !== `v${version}`);
+assert(Boolean(prevTag), `找到上一版本 tag（${prevTag}）`);
+
+const range = git(["log", "--format=%h", `${prevTag}..${tip}`]).split("\n").filter(Boolean);
+const missing = range.filter((h) => !listed.some((l) => h.startsWith(l) || l.startsWith(h)));
+assert(
+	missing.length === 0,
+	missing.length === 0
+		? `${releaseDoc} 覆盖 ${prevTag}..${tip} 全部 ${range.length} 个 commit`
+		: `${releaseDoc} 缺少 ${missing.length} 个 commit: ${missing.join(", ")}`,
+);
 
 // ═══════════════════════════════════════════════════════════════
 //  Summary

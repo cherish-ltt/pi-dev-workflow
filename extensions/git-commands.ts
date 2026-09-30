@@ -34,7 +34,7 @@ async function runGitCommand(
 	pi: ExtensionAPI,
 	ctx: {
 		cwd: string;
-		ui: { notify: (msg: string, type: string) => void };
+		ui: { notify: (msg: string, type: "info" | "warning" | "error") => void };
 	},
 	args: string[],
 	action: string,
@@ -46,7 +46,7 @@ async function runGitCommand(
 			ctx.ui.notify(`❌ ${action} 失败 (exit ${result.code}): ${detail}`, "error");
 			return false;
 		}
-		ctx.ui.notify(`✅ ${action} 完成`, "success");
+		ctx.ui.notify(`✅ ${action} 完成`, "info");
 		return true;
 	} catch (err) {
 		ctx.ui.notify(`❌ ${action} 异常: ${err instanceof Error ? err.message : String(err)}`, "error");
