@@ -1,7 +1,16 @@
 /**
- * test-no-subagents.mjs — 验证子代理系统已移除，其余功能正常工作
+ * test-no-subagents.mjs — 结构性回归断言
  *
  * Run: node tests/test-no-subagents.mjs
+ *
+ * 覆盖：
+ *   1. 子代理基础设施已删除
+ *   2. dev 命令：4 个命令、参数即任务、意图识别复用 pre-check、不再绑定 Grill/PRD
+ *   3. 自动审查检测独立为 review-detect.ts
+ *   4. git 命令直接执行，不再委派给子代理
+ *   5. /grill 与 /prd 是独立命令
+ *   6. UI 组件与输出目录约定
+ *   7. /dev-pre-check 意图校验（confirmIntent 为共享实现）
  */
 
 import * as fs from "node:fs";
@@ -57,22 +66,36 @@ assertNotExists("agents/", "agents/ 目录已删除");
 assertNotExists(".doc/AGENT-FRONTMATTER-REFERENCE.md", "AGENT-FRONTMATTER-REFERENCE.md 已删除");
 
 // ═══════════════════════════════════════════════════════════════
-//  2. dev-prompts 不再引用子代理，改为直接发送给当前代理
+//  2. dev 命令：4 个命令，参数即任务，意图识别复用 pre-check
 // ═══════════════════════════════════════════════════════════════
 
 console.log("\n📋 dev-prompts.ts\n");
 
 assertNotIncludes("extensions/dev-prompts.ts", "./sub-agents", "不再引入 sub-agents");
 assertNotIncludes("extensions/dev-prompts.ts", "./workflow-engine", "不再引入 workflow-engine");
-assertNotIncludes("extensions/dev-prompts.ts", "runWorkflow", "不再调用 runWorkflow");
-assertNotIncludes("extensions/dev-prompts.ts", "discoverAgents", "不再自动发现 agent");
-assertNotIncludes("extensions/dev-prompts.ts", "WORKFLOW_STEPS", "不再定义工作流步骤链");
-assertIncludes("extensions/dev-prompts.ts", "pi.sendUserMessage(finalPrompt", "组装后的提示词直接发送给当前代理");
-assertIncludes("extensions/dev-prompts.ts", "saveAnswerFile(ctx.cwd, finalPrompt)", "保留提示词持久化");
-assertIncludes("extensions/dev-prompts.ts", "recoverFromBackup(ctx.cwd)", "保留断点恢复");
+assertNotIncludes("extensions/dev-prompts.ts", "./grill-me-agent", "不再绑定 Grill/PRD 运行时");
+assertNotIncludes("extensions/dev-prompts.ts", "runGrillPhase", "不再触发 Grill 追问");
+assertNotIncludes("extensions/dev-prompts.ts", "runPRDPhase", "不再触发 PRD 生成");
+assertNotIncludes("extensions/dev-prompts.ts", "WizardQuestion", "向导式提问已移除");
+assertIncludes("extensions/dev-prompts.ts", 'import { confirmIntent } from "./pre-check"', "意图识别复用 pre-check");
+assertIncludes("extensions/dev-prompts.ts", "uiTaskArg(ctx, args", "任务原文来自命令参数，缺省才弹输入框");
+assertIncludes("extensions/dev-prompts.ts", "detectProjectDefaults", "默认验收标准来自项目探测");
+assertIncludes("extensions/dev-prompts.ts", "defaultAcceptanceItems", "默认验收标准按条目生成");
+assertIncludes("extensions/dev-prompts.ts", "## 身份与职责", "提示词包含身份与职责段");
+assertIncludes("extensions/dev-prompts.ts", "## 已确认的任务意图", "提示词携带已确认的意图");
+assertIncludes("extensions/dev-prompts.ts", "## 验收标准", "提示词包含默认验收标准段");
+assertIncludes("extensions/dev-prompts.ts", "pi.sendUserMessage(prompt", "组装后的提示词直接发送给当前代理");
+
+for (const cmd of ["dev-feat", "dev-fix", "dev-refactor", "dev-test"]) {
+	assertIncludes("extensions/dev-prompts.ts", `registerDev(pi, "${cmd}"`, `注册 /${cmd}`);
+}
+
+for (const cmd of ["dev-doc", "dev-perf", "dev-style", "dev-security", "dev-chore", "dev-explain", "dev-compare"]) {
+	assertNotIncludes("extensions/dev-prompts.ts", `"${cmd}"`, `/${cmd} 已移除`);
+}
 
 // ═══════════════════════════════════════════════════════════════
-//  2b. 自动审查检测独立为 review-detect.ts
+//  3. 自动审查检测独立为 review-detect.ts
 // ═══════════════════════════════════════════════════════════════
 
 console.log("\n📋 review-detect.ts\n");
@@ -85,7 +108,7 @@ assertIncludes("extensions/review-detect.ts", "expandPromptTemplates: true", "sk
 assertIncludes("extensions/review-detect.ts", '"pi-review"', "自动审查仍查找 pi-review/ 输出目录");
 
 // ═══════════════════════════════════════════════════════════════
-//  3. Git 命令直接执行，不再委派给子代理
+//  4. Git 命令直接执行，不再委派给子代理
 // ═══════════════════════════════════════════════════════════════
 
 console.log("\n📋 git-commands.ts\n");
@@ -99,7 +122,7 @@ assertIncludes("extensions/git-commands.ts", "git-push", "保留 /git-push 命�
 assertIncludes("extensions/git-commands.ts", "git-commit-push", "保留 /git-commit-push 命令");
 
 // ═══════════════════════════════════════════════════════════════
-//  4. Grill / PRD 运行在当前代理中
+//  5. Grill / PRD 是独立命令，运行在当前代理中
 // ═══════════════════════════════════════════════════════════════
 
 console.log("\n📋 grill-me-agent.ts\n");
@@ -111,34 +134,23 @@ assertIncludes("extensions/grill-me-agent.ts", "GRILL_ANSWERS_DIRNAME = \"answer
 assertIncludes("extensions/grill-me-agent.ts", "GRILL_QUESTIONS_DIRNAME = \"questions\"", "保留 questions 子目录");
 
 // ═══════════════════════════════════════════════════════════════
-//  5. UI 组件保留 select/confirm/input，移除工作流面板
+//  6. UI 组件与输出目录约定
 // ═══════════════════════════════════════════════════════════════
 
-console.log("\n📋 ui-helpers.ts\n");
+console.log("\n📋 输出目录与 UI 组件\n");
 
-assertNotIncludes("extensions/ui-helpers.ts", "updateWorkflowWidget", "移除工作流 widget");
-assertNotIncludes("extensions/ui-helpers.ts", "sendWorkflowResult", "移除工作流结果消息");
-assertNotIncludes("extensions/ui-helpers.ts", "WorkflowStepWidgetState", "移除工作流状态类型");
+const reviewSkill = fs.readFileSync(path.resolve(ROOT, "skills/review-html/SKILL.md"), "utf-8");
+assert(reviewSkill.includes(".pi-dev-output/pi-review/html/"), "review-html 仍写入 pi-review/html/");
+
+assertIncludes("extensions/session-utils.ts", "detectProjectDefaults", "项目探测（语言/测试/lint/pre-commit/CI）");
+assertIncludes("extensions/session-utils.ts", "defaultAcceptanceItems", "生成默认验收标准条目");
 assertIncludes("extensions/ui-helpers.ts", "export function uiSelect", "保留 uiSelect");
 assertIncludes("extensions/ui-helpers.ts", "export function uiConfirm", "保留 uiConfirm");
 assertIncludes("extensions/ui-helpers.ts", "export function uiInput", "保留 uiInput");
-
-// ═══════════════════════════════════════════════════════════════
-//  6. 审查技能与输出目录结构保持不变
-// ═══════════════════════════════════════════════════════════════
-
-console.log("\n📋 输出目录与技能\n");
-
-const reviewSkill = fs.readFileSync(path.resolve(ROOT, "skills/review-html/SKILL.md"), "utf-8");
-assertIncludes("skills/review-html/SKILL.md", ".pi-dev-output/pi-review/html/", "review-html 仍写入 pi-review/html/");
-
-const devPrompts = fs.readFileSync(path.resolve(ROOT, "extensions/dev-prompts.ts"), "utf-8");
-assertIncludes("extensions/session-utils.ts", "detectProjectDefaults", "项目探测（语言/测试/lint/pre-commit/CI）");
-assertIncludes("extensions/session-utils.ts", "defaultAcceptance", "生成默认验收标准");
-assertIncludes("extensions/dev-prompts.ts", "applyDefaults", "未填字段注入默认值");
-assertIncludes("extensions/dev-prompts.ts", "**验收标准**", "四段式：验收标准段");
-assertIncludes("extensions/dev-prompts.ts", "WizardQuestion", "提问结构支持字段合并");
-assertIncludes("extensions/dev-prompts.ts", "assignAnswers", "提问支持单值/多字段填写");
+assertIncludes("extensions/ui-helpers.ts", "export async function uiTaskArg", "命令参数与输入框二选一取任务文本");
+assertNotIncludes("extensions/ui-helpers.ts", "updateWorkflowWidget", "移除工作流 widget");
+assertNotIncludes("extensions/ui-helpers.ts", "sendWorkflowResult", "移除工作流结果消息");
+assertNotIncludes("extensions/ui-helpers.ts", "WorkflowStepWidgetState", "移除工作流状态类型");
 
 // ═══════════════════════════════════════════════════════════════
 //  7. /dev-pre-check 独立意图校验扩展
@@ -148,6 +160,7 @@ console.log("\n📋 pre-check.ts\n");
 
 assertExists("extensions/pre-check.ts", "提供独立的 pre-check 扩展");
 assertIncludes("extensions/pre-check.ts", 'registerCommand("dev-pre-check"', "注册 /dev-pre-check 命令");
+assertIncludes("extensions/pre-check.ts", "export async function confirmIntent", "导出共享的意图确认循环");
 assertIncludes("extensions/pre-check.ts", "用自己的话重述你认为用户的目标是什么，以及用户试图解决的问题是什么", "固定指令：用自己的话重述目标与问题");
 assertIncludes("extensions/pre-check.ts", "[pre-check] 任务意图校验：只复述，不执行", "意图校验提示词声明只复述不执行");
 assertIncludes("extensions/pre-check.ts", "禁止修改、创建、删除任何文件", "约束禁止任何实质改动");
@@ -155,8 +168,9 @@ assertIncludes("extensions/pre-check.ts", "pi.sendUserMessage(buildExecutionProm
 assertIncludes("extensions/pre-check.ts", "buildExecutionPrompt(originalPrompt: string, intent: string)", "执行提示词携带已确认的意图复述");
 assertIncludes("extensions/pre-check.ts", "ctx.isIdle()", "以代理空闲作为复述完成信号之一");
 assertIncludes("extensions/pre-check.ts", "pollFor", "轮询等待复述产物");
-assertNotIncludes("extensions/pre-check.ts", "./dev-prompts", "不依赖 /dev-* 向导实现");
-assertNotIncludes("extensions/dev-prompts.ts", "dev-pre-check", "dev-prompts 不受 pre-check 影响");
+assertNotIncludes("extensions/pre-check.ts", "./dev-prompts", "不依赖 /dev-* 命令实现");
+assertNotIncludes("extensions/pre-check.ts", "./grill-me-agent", "不依赖 Grill/PRD 运行时");
+assertNotIncludes("extensions/dev-prompts.ts", "dev-pre-check", "dev-prompts 不注册覆盖 pre-check 的命令");
 
 // ═══════════════════════════════════════════════════════════════
 //  Summary
@@ -170,5 +184,5 @@ if (fail > 0) {
 	console.error("\n⚠️  部分测试未通过");
 	process.exit(1);
 } else {
-	console.log("\n✅ 所有测试通过 — 子代理已移除，其余功能正常运行");
+	console.log("\n✅ 所有测试通过");
 }

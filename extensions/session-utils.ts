@@ -98,16 +98,15 @@ export function detectProjectDefaults(cwd: string): ProjectDefaults {
 	return d;
 }
 
-/** 根据项目探测结果生成常规验收标准（测试 + lint + pre-commit + CI）。 */
-export function defaultAcceptance(d: ProjectDefaults): string {
-	const parts: string[] = [];
-	if (d.testCmd) parts.push(`运行 ${d.testCmd} 确认全部测试通过、无回归`);
-	else parts.push(`按 ${d.language || "项目"} 的常规测试方式编写并运行测试，确认核心逻辑正确、无回归`);
-	if (d.lintCmd) parts.push(`运行 ${d.lintCmd} 符合代码规范`);
-	if (d.hasPreCommit) parts.push("通过本地 pre-commit 钩子检查");
-	if (d.hasCI) parts.push("通过 CI 检查");
-	if (parts.length === 0) parts.push("核心逻辑正确、边界情况处理完善、无行为回归");
-	return parts.join("；");
+/** 根据项目探测结果生成常规验收标准条目（测试 + lint + pre-commit + CI）。 */
+export function defaultAcceptanceItems(d: ProjectDefaults): string[] {
+	const items: string[] = [];
+	if (d.testCmd) items.push(`运行 ${d.testCmd} 确认全部测试通过、无回归`);
+	else items.push(`按 ${d.language || "项目"} 的常规测试方式编写并运行测试，确认核心逻辑正确、无回归`);
+	if (d.lintCmd) items.push(`运行 ${d.lintCmd} 符合代码规范`);
+	if (d.hasPreCommit) items.push("通过本地 pre-commit 钩子检查");
+	if (d.hasCI) items.push("通过 CI 检查");
+	return items;
 }
 
 /**

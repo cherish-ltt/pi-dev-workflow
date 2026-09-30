@@ -11,7 +11,8 @@
  *   4. 用户确认意图：正确 → 开始真正的工作；不正确 → 补充说明后重新复述；取消 → 结束
  *   5. 确认正确后，把「原始 prompt + 已确认的意图复述」投递给代理开始执行
  *
- * 独立实现：不复用 /dev-* 向导、Grill、PRD 的流程设计，仅共用底层 UI 与轮询工具。
+ * confirmIntent() 是上述 2-4 步的通用实现，/dev-feat 等 dev 命令同样复用：
+ * 它们把已确认的意图接进自己组装的提示词，而不是另造一套意图识别。
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -89,9 +90,60 @@ export function buildExecutionPrompt(originalPrompt: string, intent: string): st
 	].join("\n");
 }
 
-// ── 流程 ─────────────────────────────────────────────────────
+// ── 意图确认循环 ─────────────────────────────────────────────
 
 const PRE_CHECK_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * 复述 → 确认 →（必要时）修正 的意图确认循环。
+ * 返回已确认的意图复述；用户取消或始终未取到复述时返回 undefined。
+ */
+export async function confirmIntent(
+	task: string,
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+): Promise<string | undefined> {
+	const corrections: string[] = [];
+
+	for (;;) {
+		ctx.ui.notify("正在让代理复述任务意图（只分析，不执行）...", "info");
+		const sentAt = Date.now();
+		pi.sendUserMessage(buildPreCheckPrompt(task, corrections), { deliverAs: "followUp" });
+
+		// 完成标志：代理空闲且本轮产生了新的 assistant 文本。
+		// 不依赖 waitForIdle —— 它可能在 followUp 触发的新 turn 开始前就返回。
+		const intent = await pollFor(
+			() => (ctx.isIdle() ? getLastAssistantTextAfter(ctx, sentAt) || undefined : undefined),
+			PRE_CHECK_TIMEOUT_MS,
+		);
+
+		if (!intent) {
+			const retry = await uiSelect(ctx, "未获取到代理的意图复述", ["重试", "取消"]);
+			if (retry === "重试") continue;
+			return undefined;
+		}
+
+		const decision = await uiSelect(ctx, "意图确认：以上复述是否准确反映你的目标？", [
+			"是 — 意图正确，开始执行",
+			"否 — 意图不正确，我要补充说明后重新分析",
+			"取消",
+		]);
+
+		if (!decision || decision === "取消") return undefined;
+		if (decision.startsWith("是")) return intent;
+
+		const fix = await uiInput(
+			ctx,
+			"补充/修正说明",
+			"说明哪里理解错了、遗漏了什么",
+			false,
+		);
+		if (fix === undefined) return undefined;
+		corrections.push(fix.trim() || "（用户未提供具体说明，请重新检查复述）");
+	}
+}
+
+// ── 流程 ─────────────────────────────────────────────────────
 
 async function runPreCheck(
 	pi: ExtensionAPI,
@@ -116,55 +168,14 @@ async function runPreCheck(
 		if (!originalPrompt) return;
 	}
 
-	const corrections: string[] = [];
-
-	for (;;) {
-		ctx.ui.notify("正在让代理复述任务意图（只分析，不执行）...", "info");
-		const sentAt = Date.now();
-		pi.sendUserMessage(buildPreCheckPrompt(originalPrompt, corrections), { deliverAs: "followUp" });
-
-		// 完成标志：代理空闲且本轮产生了新的 assistant 文本。
-		// 不依赖 waitForIdle —— 它可能在 followUp 触发的新 turn 开始前就返回。
-		const intent = await pollFor(
-			() => (ctx.isIdle() ? getLastAssistantTextAfter(ctx, sentAt) || undefined : undefined),
-			PRE_CHECK_TIMEOUT_MS,
-		);
-
-		if (!intent) {
-			const retry = await uiSelect(ctx, "未获取到代理的意图复述", ["重试", "取消"]);
-			if (retry === "重试") continue;
-			return;
-		}
-
-		const decision = await uiSelect(ctx, "意图确认：以上复述是否准确反映你的目标？", [
-			"是 — 意图正确，开始执行",
-			"否 — 意图不正确，我要补充说明后重新分析",
-			"取消",
-		]);
-
-		if (!decision || decision === "取消") {
-			ctx.ui.notify("已取消，未执行任何改动", "info");
-			return;
-		}
-
-		if (decision.startsWith("是")) {
-			pi.sendUserMessage(buildExecutionPrompt(originalPrompt, intent), { deliverAs: "followUp" });
-			ctx.ui.notify("意图已确认，开始执行", "success");
-			return;
-		}
-
-		const fix = await uiInput(
-			ctx,
-			"补充/修正说明",
-			"说明哪里理解错了、遗漏了什么",
-			false,
-		);
-		if (fix === undefined) {
-			ctx.ui.notify("已取消，未执行任何改动", "info");
-			return;
-		}
-		corrections.push(fix.trim() || "（用户未提供具体说明，请重新检查复述）");
+	const intent = await confirmIntent(originalPrompt, ctx, pi);
+	if (!intent) {
+		ctx.ui.notify("已取消，未执行任何改动", "info");
+		return;
 	}
+
+	pi.sendUserMessage(buildExecutionPrompt(originalPrompt, intent), { deliverAs: "followUp" });
+	ctx.ui.notify("意图已确认，开始执行", "info");
 }
 
 // ── Extension ────────────────────────────────────────────────

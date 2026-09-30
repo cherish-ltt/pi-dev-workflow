@@ -8,6 +8,7 @@
  *   - uiSelect()     — replaces ctx.ui.select() with wrapping
  *   - uiConfirm()    — replaces ctx.ui.confirm() with wrapping
  *   - uiInput()      — replaces ctx.ui.input() with wrapping
+ *   - uiTaskArg()    — 命令参数或输入框二选一取任务文本
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -292,6 +293,25 @@ export function uiInput(
             },
         };
     });
+}
+
+// ── Task argument helper ─────────────────────────────────────
+
+/**
+ * 取任务文本：优先使用命令参数，缺省时弹一次必填输入框。
+ * 参数为空、输入为空或用户取消时返回 undefined。
+ */
+export async function uiTaskArg(
+    ctx: ExtensionContext,
+    args: string,
+    label: string,
+    placeholder?: string,
+): Promise<string | undefined> {
+    const fromArgs = args.trim();
+    if (fromArgs) return fromArgs;
+    const input = await uiInput(ctx, label, placeholder, true);
+    const text = input?.trim();
+    return text ? text : undefined;
 }
 
 // ═══════════════════════════════════════════════════════════════
