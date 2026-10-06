@@ -73,6 +73,7 @@ pi-package/
 | **pi-permission-system** | 权限管理系统 | `pi install npm:@gotgenes/pi-permission-system` |
 | **pi-web** |  pi-web 界面(更直观便捷) | `npm install -g @agegr/pi-web@latest` 使用`pi-web`启动 |
 | **billion-context** | 上下文压缩插件：100K 上下文窗口就够用、令牌消耗减少 5 倍、单次会话可连续跑一个月（数十亿令牌）且压缩质量有保障，适用于 pi、OpenCode、Codex、Claude Code 等各类代理 | `pi install npm:billion-context`<br>或用启动器方式：`npm install -g billion-context` 后以 `bili pi` 启动 |
+| **termdraw/pi** | 通过 opentui-island 将 termDRAW 嵌入到 Pi 中 | `pi install npm:@termdraw/pi` then in pi agent run `/termdraw` |
 
 
 
