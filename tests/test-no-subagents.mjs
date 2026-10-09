@@ -10,7 +10,7 @@
  *   4. git 命令直接执行，不再委派给子代理
  *   5. /grill 与 /prd 是独立命令
  *   6. UI 组件与输出目录约定
- *   7. /dev-pre-check 意图校验（confirmIntent 为共享实现）
+ *   7. /dev-pre-check 意图校验（confirmIntent、只读探查规则为共享实现）
  *   8. notify 调用使用合法类型（info / warning / error）
  *   9. 当前版本的 RELEASE 说明覆盖该版本区间内的全部 commit
  */
@@ -167,6 +167,9 @@ console.log("\n📋 pre-check.ts\n");
 assertExists("extensions/pre-check.ts", "提供独立的 pre-check 扩展");
 assertIncludes("extensions/pre-check.ts", 'registerCommand("dev-pre-check"', "注册 /dev-pre-check 命令");
 assertIncludes("extensions/pre-check.ts", "export async function confirmIntent", "导出共享的意图确认循环");
+assertIncludes("extensions/pre-check.ts", "export const READ_ONLY_EXPLORATION_RULES", "只读探查规则为共享导出");
+assertIncludes("extensions/pre-check.ts", "## 探索要求（先只读探查，再复述）", "复述前要求先只读探查代码库");
+assertIncludes("extensions/pre-check.ts", "### 1. 已核实的现状（探索结果）", "复述输出先交代已核实的现状");
 assertIncludes("extensions/pre-check.ts", "用自己的话重述你认为用户的目标是什么，以及用户试图解决的问题是什么", "固定指令：用自己的话重述目标与问题");
 assertIncludes("extensions/pre-check.ts", "[pre-check] 任务意图校验：只复述，不执行", "意图校验提示词声明只复述不执行");
 assertIncludes("extensions/pre-check.ts", "禁止修改、创建、删除任何文件", "约束禁止任何实质改动");
