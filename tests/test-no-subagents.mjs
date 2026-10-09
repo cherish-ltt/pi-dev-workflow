@@ -5,7 +5,7 @@
  *
  * 覆盖：
  *   1. 子代理基础设施已删除
- *   2. dev 命令：4 个命令、参数即任务、意图识别复用 pre-check、不再绑定 Grill/PRD
+ *   2. dev 命令：4 个命令、参数即任务、意图识别复用 pre-check、只读探查规则共享、不再绑定 Grill/PRD
  *   3. 自动审查检测独立为 review-detect.ts
  *   4. git 命令直接执行，不再委派给子代理
  *   5. /grill 与 /prd 是独立命令
@@ -80,7 +80,10 @@ assertNotIncludes("extensions/dev-prompts.ts", "./grill-me-agent", "不再绑定
 assertNotIncludes("extensions/dev-prompts.ts", "runGrillPhase", "不再触发 Grill 追问");
 assertNotIncludes("extensions/dev-prompts.ts", "runPRDPhase", "不再触发 PRD 生成");
 assertNotIncludes("extensions/dev-prompts.ts", "WizardQuestion", "向导式提问已移除");
-assertIncludes("extensions/dev-prompts.ts", 'import { confirmIntent } from "./pre-check"', "意图识别复用 pre-check");
+assertIncludes("extensions/dev-prompts.ts", 'from "./pre-check"', "意图识别复用 pre-check");
+assertIncludes("extensions/dev-prompts.ts", "confirmIntent(", "调用 pre-check 导出的共享意图确认循环");
+assertIncludes("extensions/dev-prompts.ts", "READ_ONLY_EXPLORATION_RULES", "dev 命令复用同一份只读探查规则");
+assertIncludes("extensions/dev-prompts.ts", "## 探索要求（先只读探查，再动手）", "提示词包含探索要求段");
 assertIncludes("extensions/dev-prompts.ts", "uiTaskArg(ctx, args", "任务原文来自命令参数，缺省才弹输入框");
 assertIncludes("extensions/dev-prompts.ts", "detectProjectDefaults", "默认验收标准来自项目探测");
 assertIncludes("extensions/dev-prompts.ts", "defaultAcceptanceItems", "默认验收标准按条目生成");

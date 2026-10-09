@@ -6,7 +6,7 @@
  * 每个命令的流程一致：
  *   1. 命令参数就是任务原文；不带参数时弹一次必填输入框
  *   2. 复用 pre-check 的意图确认循环：代理先复述目标与问题，用户确认后才继续
- *   3. 提示词只补两件事：AI 的身份与职责、未说明时的默认收尾验收标准
+ *   3. 提示词只补三件事：先只读探查代码库的要求、AI 的身份与职责、未说明时的默认收尾验收标准
  *      —— 任务目标来自第 2 步已确认的意图，不在这里重新解释需求
  *   4. 投递给当前代理执行
  *
@@ -14,7 +14,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { confirmIntent } from "./pre-check";
+import { confirmIntent, READ_ONLY_EXPLORATION_RULES } from "./pre-check";
 import { detectProjectDefaults, defaultAcceptanceItems, type ProjectDefaults } from "./session-utils";
 import { uiTaskArg } from "./ui-helpers";
 
@@ -32,7 +32,7 @@ const FEAT: DevType = {
 	description: "(dev) 新功能实现 — 先复述确认意图，再按 身份职责 + 默认验收标准 组装提示词执行",
 	role: (d) => `资深 ${d.language || "项目"} 工程师`,
 	duties: [
-		"先读代码库再动手：给出逐步实施计划（要修改/新建的文件、迁移、对现有代码的假设），经我确认后再写代码",
+		"给出逐步实施计划（要修改/新建的文件、迁移、对现有代码的假设），经我确认后再写代码",
 		"只实现任务要求的功能，不顺手重构无关代码",
 		"保持现有公共 API 兼容，不为假设性需求添加抽象层",
 	],
@@ -42,7 +42,7 @@ const FIX: DevType = {
 	description: "(dev) 问题修复 — 先复述确认意图，再按 根因定位职责 + 默认验收标准 组装提示词执行",
 	role: (d) => `资深 ${d.language || "项目"} 调试工程师`,
 	duties: [
-		"先读相关代码与日志定位根因，不用消除报错的方式掩盖症状",
+		"先用只读探查定位根因（相关代码、日志、调用链），不用消除报错的方式掩盖症状",
 		"修复前说明根因与方案取舍，只改与该问题相关的代码",
 		"补一个能复现该问题的测试",
 	],
@@ -54,7 +54,7 @@ const REFACTOR: DevType = {
 	role: (d) => `资深 ${d.language || "项目"} 工程师`,
 	duties: [
 		"重构前后对外行为与公共 API 签名完全一致",
-		"先说明要消除的具体结构性问题再动手；不做与目标无关的调整",
+		"先指出要消除的具体结构性问题（带真实文件与位置），再动手；不做与目标无关的调整",
 		"不新增功能、不修改业务逻辑",
 	],
 	extraAcceptance: ["对外行为与公共 API 不变，现有测试全部通过"],
@@ -92,6 +92,10 @@ function buildDevPrompt(
 		"",
 		"## 已确认的任务意图",
 		intent,
+		"",
+		"## 探索要求（先只读探查，再动手）",
+		"动手前必须先看真实代码；实施计划里引用的文件与符号都必须是本轮真实读到的。",
+		...READ_ONLY_EXPLORATION_RULES,
 		"",
 		"## 身份与职责",
 		`你是${type.role(d)}。`,
