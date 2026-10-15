@@ -39,6 +39,9 @@ export const BACK_MARKER = "__BACK__";
 /** The display text for the back option. */
 export const BACK_OPTION_TEXT = "← 返回上一步";
 
+/** 选项：字符串（label 即返回值），或带一行说明的对象。 */
+export type SelectChoice = string | { label: string; description?: string };
+
 // ── Helpers ──────────────────────────────────────────────────
 
 /** Draw a bordered box around content lines. */
@@ -78,11 +81,12 @@ function dim(theme: Theme, text: string): string {
  * Returns the selected item value, or undefined on cancel (Esc).
  * When backable=true, prepends "← 返回上一步" as the first item;
  * caller should check for it via choice === BACK_OPTION_TEXT.
+ * 传对象形式的选项时，value 仍是 label，description 显示为同一行右侧的说明。
  */
 export function uiSelect(
     ctx: ExtensionContext,
     title: string,
-    items: string[],
+    items: SelectChoice[],
     backable = false,
 ): Promise<string | undefined> {
     const selectItems: SelectItem[] = [];
@@ -90,7 +94,9 @@ export function uiSelect(
         selectItems.push({ value: BACK_OPTION_TEXT, label: BACK_OPTION_TEXT });
     }
     for (const item of items) {
-        selectItems.push({ value: item, label: item });
+        const label = typeof item === "string" ? item : item.label;
+        const description = typeof item === "string" ? undefined : item.description;
+        selectItems.push(description ? { value: label, label, description } : { value: label, label });
     }
 
     return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {

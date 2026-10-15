@@ -157,6 +157,7 @@ assertIncludes("extensions/ui-helpers.ts", "export function uiSelect", "保留 u
 assertIncludes("extensions/ui-helpers.ts", "export function uiConfirm", "保留 uiConfirm");
 assertIncludes("extensions/ui-helpers.ts", "export function uiInput", "保留 uiInput");
 assertIncludes("extensions/ui-helpers.ts", "export async function uiTaskArg", "命令参数与输入框二选一取任务文本");
+assertIncludes("extensions/ui-helpers.ts", "export type SelectChoice", "uiSelect 支持带说明的选项");
 assertNotIncludes("extensions/ui-helpers.ts", "updateWorkflowWidget", "移除工作流 widget");
 assertNotIncludes("extensions/ui-helpers.ts", "sendWorkflowResult", "移除工作流结果消息");
 assertNotIncludes("extensions/ui-helpers.ts", "WorkflowStepWidgetState", "移除工作流状态类型");
@@ -183,6 +184,24 @@ assertIncludes("extensions/pre-check.ts", "pollFor", "轮询等待复述产物")
 assertNotIncludes("extensions/pre-check.ts", "./dev-prompts", "不依赖 /dev-* 命令实现");
 assertNotIncludes("extensions/pre-check.ts", "./grill-me-agent", "不依赖 Grill/PRD 运行时");
 assertNotIncludes("extensions/dev-prompts.ts", "dev-pre-check", "dev-prompts 不注册覆盖 pre-check 的命令");
+
+// ═══════════════════════════════════════════════════════════════
+//  7.5 dev_ask 内部提问工具
+// ═══════════════════════════════════════════════════════════════
+
+console.log("\n📋 dev-ask.ts\n");
+
+assertExists("extensions/dev-ask.ts", "提供内部的 dev_ask 提问工具");
+assertIncludes("extensions/dev-ask.ts", 'export const DEV_ASK_TOOL_NAME = "dev_ask"', "工具名为 dev_ask");
+assertIncludes("extensions/dev-ask.ts", "export function activateDevAsk", "导出临时激活/还原工具列表的入口");
+assertIncludes("extensions/dev-ask.ts", 'exposure: "model-only"', "dev_ask 只对模型声明、不被其他工具调用");
+assertIncludes("extensions/dev-ask.ts", "defaultActive: false", "dev_ask 默认不激活");
+assertIncludes("extensions/dev-ask.ts", "maxItems: MAX_OPTIONS", "限制每题选项数量");
+assertIncludes("extensions/dev-ask.ts", "minItems: MIN_OPTIONS", "每题最少选项数");
+assertIncludes("extensions/dev-ask.ts", "CUSTOM_CHOICE", "每题附自定义输入入口");
+assertIncludes("extensions/dev-ask.ts", "BACK_OPTION_TEXT", "复用 ui-helpers 的「返回上一步」");
+assertNotIncludes("extensions/dev-ask.ts", "ask_user_question", "不依赖第三方 ask_user_question 插件");
+assertNotIncludes("extensions/dev-ask.ts", "typebox", "用 pi-ai 重导出的 Type，不直接依赖 typebox");
 
 // ═══════════════════════════════════════════════════════════════
 //  8. notify 调用使用合法类型
