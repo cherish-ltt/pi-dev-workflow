@@ -7,7 +7,6 @@ node_modules/
 
 # gitnexus analyze
 .claude/
-AGENTS.md
 CLAUDE.md
 qa.md
 
