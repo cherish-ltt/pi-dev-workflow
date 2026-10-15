@@ -7,17 +7,20 @@
  *   1. 取用户原始 prompt（命令参数，缺省则弹输入框）
  *   2. 组合提示词 =「用户原始 prompt」+ 固定的「先只读探查代码库、再重述目标与问题」指令，
  *      并把本轮任务意图改成「只做意图理解，不产生任何实质改动」
- *   3. 等待代理给出复述（代理空闲 + 本轮新增的 assistant 文本）
- *   4. 用户确认意图：正确 → 开始真正的工作；不正确 → 补充说明后重新复述；取消 → 结束
- *   5. 确认正确后，把「原始 prompt + 已确认的意图复述」投递给代理开始执行
+ *   3. 复述轮次内临时启用 dev_ask 工具：模型把关键不确定项做成「题目 + 选项」问用户
+ *   4. 等待代理给出复述（代理空闲 + 本轮新增的 assistant 文本）
+ *   5. 用户确认意图：正确 → 开始真正的工作；补充 → 并入意图后直接开工（不重新复述）；
+ *      不正确 → 补充说明后重新复述；取消 → 结束
+ *   6. 确认后，把「原始 prompt + 已确认的意图复述（含补充）」投递给代理开始执行
  *
- * confirmIntent() 是上述 2-4 步的通用实现，/dev-feat 等 dev 命令同样复用：
+ * confirmIntent() 是上述 2-5 步的通用实现，/dev-feat 等 dev 命令同样复用：
  * 它们把已确认的意图接进自己组装的提示词，而不是另造一套意图识别。
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { DEV_ASK_TOOL_NAME, activateDevAsk } from "./dev-ask";
 import { uiInput, uiSelect } from "./ui-helpers";
-import { pollFor, getLastAssistantTextAfter } from "./session-utils";
+import { getLastAssistantTextAfter } from "./session-utils";
 
 // ── 提示词组装 ────────────────────────────────────────────────
 
@@ -46,7 +49,9 @@ const RESTATE_INSTRUCTION = [
 	"- 禁止修改、创建、删除任何文件；禁止运行任何有副作用的命令（安装、构建、测试、git 写操作等）。",
 	"- 禁止调用写入类工具（如 write、edit，以及 bash 中的写操作）；只允许只读探查（如 read、grep）。",
 	"- 禁止输出代码、补丁、diff、实施计划、解决方案或改进建议。",
-	"- 不要反问用户、不要请求确认、不要给出下一步行动。",
+	"- 不要用文字反问用户，也不要请求用户确认复述本身，不要给出下一步行动。",
+	`- 关键不确定项（会影响实现方向、又无法从代码或原始 prompt 推出）用 ${DEV_ASK_TOOL_NAME} 一次性提问：题目 + 2-4 个选项、每题带说明，题数不限；能从代码里查到的先自己查，不要问琐碎细节。`,
+	`- 若你的工具列表里没有 ${DEV_ASK_TOOL_NAME}，就把这些不确定项留在第 4 节的文字里，不要臆造工具。`,
 	"- 若原始 prompt 存在歧义或信息缺口，在「不确定之处」中明确指出，但不要替用户做决定。",
 	"",
 	"## 输出格式（严格遵循）",
@@ -60,7 +65,7 @@ const RESTATE_INSTRUCTION = [
 	"（用自己的话，2-4 句）",
 	"",
 	"### 4. 不确定之处",
-	"（逐条列出；能靠只读探查消除的先查完再写，剩下的区分「已读代码确认」与「仅推测」；无则写「无」）",
+	"（列出提问后仍未解决、以及不值得提问的不确定项；能靠只读探查消除的先查完再写，剩下的区分「已读代码确认」与「仅推测」；无则写「无」）",
 	"",
 	"### 5. 一句话概括",
 	"（一句话说清「用户想让我做什么」）",
@@ -112,9 +117,75 @@ export function buildExecutionPrompt(originalPrompt: string, intent: string): st
 
 const PRE_CHECK_TIMEOUT_MS = 5 * 60_000;
 
+/** 整个复述环节的绝对上限：dev_ask 等交互期间不计时，但不能无限等下去。 */
+const PRE_CHECK_MAX_WAIT_MS = 30 * 60_000;
+
+const OPT_ACCEPT = "是 — 意图正确，开始执行";
+const OPT_ACCEPT_WITH_NOTE = "是 + 补充 — 补充说明后直接开工（不重新复述）";
+const OPT_REDO = "否 — 意图不正确，我要补充说明后重新分析";
+const OPT_CANCEL = "取消";
+
+/** 确认结果：已确认的意图，或需要重新复述的修正说明。 */
+type Decision = { intent: string } | { correction: string };
+
+function withSupplement(intent: string, supplement: string): string {
+	return [intent, "", "### 用户补充（已确认，直接采纳，不需重新复述）", supplement].join("\n");
+}
+
+/** 复述后的确认环节：接受、补充后直接开工、或补充后重新复述。 */
+async function resolveDecision(ctx: ExtensionCommandContext, intent: string): Promise<Decision | undefined> {
+	for (;;) {
+		const decision = await uiSelect(ctx, "意图确认：以上复述是否准确反映你的目标？", [
+			OPT_ACCEPT,
+			OPT_ACCEPT_WITH_NOTE,
+			OPT_REDO,
+			OPT_CANCEL,
+		]);
+
+		if (!decision || decision === OPT_CANCEL) return undefined;
+		if (decision === OPT_ACCEPT) return { intent };
+
+		const supplement = decision === OPT_ACCEPT_WITH_NOTE;
+		const note = await uiInput(
+			ctx,
+			supplement ? "补充说明（并入意图，不重新复述）" : "补充/修正说明",
+			supplement ? "如 只改后端，别动前端" : "说明哪里理解错了、遗漏了什么",
+			supplement,
+		);
+		if (note === undefined) continue; // Esc → 退回确认选项
+
+		const text = note.trim();
+		if (supplement) return { intent: withSupplement(intent, text) };
+		return { correction: text || "（用户未提供具体说明，请重新检查复述）" };
+	}
+}
+
+/**
+ * 等待本轮复述产物：代理忙碌（正在执行工具、或在 dev_ask 上等用户作答）期间不计超时。
+ * 用 pollFor 的绝对超时会把「模型正在提问」误判成「未获取到复述」。
+ * 同时保留一个绝对上限，避免代理一直不空闲时无限等待。
+ */
+async function waitForRestatement(ctx: ExtensionCommandContext, sentAt: number): Promise<string | undefined> {
+	const startedAt = Date.now();
+	let deadline = startedAt + PRE_CHECK_TIMEOUT_MS;
+
+	for (;;) {
+		if (Date.now() - startedAt > PRE_CHECK_MAX_WAIT_MS) return undefined;
+
+		if (ctx.isIdle()) {
+			const text = getLastAssistantTextAfter(ctx, sentAt);
+			if (text) return text;
+			if (Date.now() > deadline) return undefined;
+		} else {
+			deadline = Date.now() + PRE_CHECK_TIMEOUT_MS;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 2_000));
+	}
+}
+
 /**
  * 复述 → 确认 →（必要时）修正 的意图确认循环。
- * 返回已确认的意图复述；用户取消或始终未取到复述时返回 undefined。
+ * 返回已确认的意图复述（可能含用户补充）；用户取消或始终未取到复述时返回 undefined。
  */
 export async function confirmIntent(
 	task: string,
@@ -122,42 +193,31 @@ export async function confirmIntent(
 	pi: ExtensionAPI,
 ): Promise<string | undefined> {
 	const corrections: string[] = [];
+	const restoreAsk = activateDevAsk(pi);
 
-	for (;;) {
-		ctx.ui.notify("正在让代理复述任务意图（只分析，不执行）...", "info");
-		const sentAt = Date.now();
-		pi.sendUserMessage(buildPreCheckPrompt(task, corrections), { deliverAs: "followUp" });
+	try {
+		for (;;) {
+			ctx.ui.notify("正在让代理复述任务意图（只分析，不执行）...", "info");
+			const sentAt = Date.now();
+			pi.sendUserMessage(buildPreCheckPrompt(task, corrections), { deliverAs: "followUp" });
 
-		// 完成标志：代理空闲且本轮产生了新的 assistant 文本。
-		// 不依赖 waitForIdle —— 它可能在 followUp 触发的新 turn 开始前就返回。
-		const intent = await pollFor(
-			() => (ctx.isIdle() ? getLastAssistantTextAfter(ctx, sentAt) || undefined : undefined),
-			PRE_CHECK_TIMEOUT_MS,
-		);
+			// 完成标志：代理空闲且本轮产生了新的 assistant 文本。
+			// 不依赖 waitForIdle —— 它可能在 followUp 触发的新 turn 开始前就返回。
+			const intent = await waitForRestatement(ctx, sentAt);
 
-		if (!intent) {
-			const retry = await uiSelect(ctx, "未获取到代理的意图复述", ["重试", "取消"]);
-			if (retry === "重试") continue;
-			return undefined;
+			if (!intent) {
+				const retry = await uiSelect(ctx, "未获取到代理的意图复述", ["重试", "取消"]);
+				if (retry === "重试") continue;
+				return undefined;
+			}
+
+			const decision = await resolveDecision(ctx, intent);
+			if (!decision) return undefined;
+			if ("intent" in decision) return decision.intent;
+			corrections.push(decision.correction);
 		}
-
-		const decision = await uiSelect(ctx, "意图确认：以上复述是否准确反映你的目标？", [
-			"是 — 意图正确，开始执行",
-			"否 — 意图不正确，我要补充说明后重新分析",
-			"取消",
-		]);
-
-		if (!decision || decision === "取消") return undefined;
-		if (decision.startsWith("是")) return intent;
-
-		const fix = await uiInput(
-			ctx,
-			"补充/修正说明",
-			"说明哪里理解错了、遗漏了什么",
-			false,
-		);
-		if (fix === undefined) return undefined;
-		corrections.push(fix.trim() || "（用户未提供具体说明，请重新检查复述）");
+	} finally {
+		restoreAsk();
 	}
 }
 
@@ -205,4 +265,5 @@ export default function (pi: ExtensionAPI) {
 			await runPreCheck(pi, ctx, args);
 		},
 	});
+
 }

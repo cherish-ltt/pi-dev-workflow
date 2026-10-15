@@ -180,7 +180,14 @@ assertIncludes("extensions/pre-check.ts", "禁止修改、创建、删除任何�
 assertIncludes("extensions/pre-check.ts", "pi.sendUserMessage(buildExecutionPrompt", "确认通过后才发送执行提示词");
 assertIncludes("extensions/pre-check.ts", "buildExecutionPrompt(originalPrompt: string, intent: string)", "执行提示词携带已确认的意图复述");
 assertIncludes("extensions/pre-check.ts", "ctx.isIdle()", "以代理空闲作为复述完成信号之一");
-assertIncludes("extensions/pre-check.ts", "pollFor", "轮询等待复述产物");
+assertIncludes("extensions/pre-check.ts", "是 + 补充 — 补充说明后直接开工（不重新复述）", "确认环节提供「补充后直接开工」选项");
+assertIncludes("extensions/pre-check.ts", "否 — 意图不正确，我要补充说明后重新分析", "保留「补充后重新复述」选项");
+assertIncludes("extensions/pre-check.ts", "### 用户补充（已确认，直接采纳，不需重新复述）", "补充内容并入已确认意图");
+assertIncludes("extensions/pre-check.ts", "activateDevAsk(pi)", "复述轮次临时启用 dev_ask 提问工具");
+assertIncludes("extensions/pre-check.ts", "restoreAsk()", "复述轮次结束（含取消）还原工具列表");
+assertIncludes("extensions/pre-check.ts", "PRE_CHECK_MAX_WAIT_MS", "忙碌期间延长等待但有绝对上限");
+assertIncludes("extensions/pre-check.ts", "async function waitForRestatement", "改用可感知忙碌状态的等待循环");
+assertNotIncludes("extensions/pre-check.ts", "import { pollFor", "不再用 pollFor 的绝对超时等复述");
 assertNotIncludes("extensions/pre-check.ts", "./dev-prompts", "不依赖 /dev-* 命令实现");
 assertNotIncludes("extensions/pre-check.ts", "./grill-me-agent", "不依赖 Grill/PRD 运行时");
 assertNotIncludes("extensions/dev-prompts.ts", "dev-pre-check", "dev-prompts 不注册覆盖 pre-check 的命令");
