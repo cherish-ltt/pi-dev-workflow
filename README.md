@@ -366,4 +366,9 @@ A: dev 命令组装出的提示词会作为用户消息出现在当前会话中�
 
 ## License
 
-MIT
+双协议并行，任选其一：
+
+- [MIT](./LICENSE-MIT)
+- [Apache-2.0](./LICENSE-APACHE)
+
+SPDX 标识：`MIT OR Apache-2.0`

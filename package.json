@@ -16,7 +16,7 @@
     "type": "git",
     "url": "git+ssh://git@github.com/cherish-ltt/pi-dev-workflow.git"
   },
-  "license": "MIT",
+  "license": "MIT OR Apache-2.0",
   "author": "ghyper9023",
   "type": "commonjs",
   "main": "index.js",
