@@ -13,11 +13,15 @@
  *      不正确 → 补充说明后重新复述；取消 → 结束
  *   6. 确认后，把「原始 prompt + 已确认的意图复述（含补充）」投递给代理开始执行
  *
+ * 补全排序：命令名补全的模糊分数在 /dev* 之间相同，同分回落到扩展文件顺序，
+ * 所以本扩展在 session_start 时包装一层补全 provider，把 /dev-pre-check 提到最前。
+ *
  * confirmIntent() 是上述 2-5 步的通用实现，/dev-feat 等 dev 命令同样复用：
  * 它们把已确认的意图接进自己组装的提示词，而不是另造一套意图识别。
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteProvider } from "@earendil-works/pi-tui";
 import { DEV_ASK_TOOL_NAME, activateDevAsk } from "./dev-ask";
 import { uiInput, uiSelect } from "./ui-helpers";
 import { getLastAssistantTextAfter } from "./session-utils";
@@ -256,6 +260,51 @@ async function runPreCheck(
 	ctx.ui.notify("意图已确认，开始执行", "info");
 }
 
+// ── 补全优先排序 ─────────────────────────────────────────────
+
+/**
+ * 补全列表里优先排到最前的命令。
+ * 值是命令名（不带前导斜杠），与补全项 value 的形态一致。
+ */
+const PRIORITY_COMMANDS = ["dev-pre-check"];
+
+/**
+ * 包一层补全 provider：命令名补全时把 PRIORITY_COMMANDS 提到最前。
+ * 命令名的模糊匹配分数对所有 /dev* 命令相同，排序此时回落到注册顺序（= 扩展文件名顺序），
+ * 所以只能在这里显式提权。
+ */
+function withPriorityCommands(current: AutocompleteProvider): AutocompleteProvider {
+	const priorityOf = (value: string): number => {
+		const index = PRIORITY_COMMANDS.indexOf(value);
+		return index === -1 ? PRIORITY_COMMANDS.length : index;
+	};
+
+	const wrapped: AutocompleteProvider = {
+		async getSuggestions(lines, cursorLine, cursorCol, options) {
+			const suggestions = await current.getSuggestions(lines, cursorLine, cursorCol, options);
+			// 只处理命令名补全（prefix 形如 "/dev"）；参数与路径补全保持原序。
+			if (!suggestions || !suggestions.prefix.startsWith("/") || suggestions.prefix.includes(" ")) {
+				return suggestions;
+			}
+			if (!suggestions.items.some((item) => PRIORITY_COMMANDS.includes(item.value))) return suggestions;
+			return {
+				...suggestions,
+				items: [...suggestions.items].sort((a, b) => priorityOf(a.value) - priorityOf(b.value)),
+			};
+		},
+		applyCompletion: (lines, cursorLine, cursorCol, item, prefix) =>
+			current.applyCompletion(lines, cursorLine, cursorCol, item, prefix),
+	};
+
+	if (current.triggerCharacters) wrapped.triggerCharacters = current.triggerCharacters;
+	if (current.shouldTriggerFileCompletion) {
+		wrapped.shouldTriggerFileCompletion = (lines, cursorLine, cursorCol) =>
+			current.shouldTriggerFileCompletion!(lines, cursorLine, cursorCol);
+	}
+
+	return wrapped;
+}
+
 // ── Extension ────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -266,4 +315,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.on("session_start", (_event, ctx) => {
+		ctx.ui.addAutocompleteProvider(withPriorityCommands);
+	});
 }

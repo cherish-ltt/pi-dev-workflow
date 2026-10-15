@@ -185,6 +185,8 @@ assertIncludes("extensions/pre-check.ts", "否 — 意图不正确，我要补�
 assertIncludes("extensions/pre-check.ts", "### 用户补充（已确认，直接采纳，不需重新复述）", "补充内容并入已确认意图");
 assertIncludes("extensions/pre-check.ts", "activateDevAsk(pi)", "复述轮次临时启用 dev_ask 提问工具");
 assertIncludes("extensions/pre-check.ts", "restoreAsk()", "复述轮次结束（含取消）还原工具列表");
+assertIncludes("extensions/pre-check.ts", "addAutocompleteProvider", "包一层补全 provider 做命令提权");
+assertIncludes("extensions/pre-check.ts", 'PRIORITY_COMMANDS = ["dev-pre-check"]', "只把 /dev-pre-check 列入优先命令");
 assertIncludes("extensions/pre-check.ts", "PRE_CHECK_MAX_WAIT_MS", "忙碌期间延长等待但有绝对上限");
 assertIncludes("extensions/pre-check.ts", "async function waitForRestatement", "改用可感知忙碌状态的等待循环");
 assertNotIncludes("extensions/pre-check.ts", "import { pollFor", "不再用 pollFor 的绝对超时等复述");
