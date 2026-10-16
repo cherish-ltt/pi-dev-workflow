@@ -1,13 +1,9 @@
 /**
- * dev-ask.ts — /dev 意图识别轮次里的内部提问工具
+ * dev-ask.ts — 默认供模型直接调用的结构化提问工具
  *
- * 模型在意图识别（confirmIntent）轮次里把「会影响实现方向、又无法从代码或需求推出」的
- * 不确定项做成「题目 + 2-4 个选项」的交互问用户，答案作为工具结果回到模型，由模型并入复述。
- * 题目数量不限，一次调用问完。
- *
- * 该工具默认不在模型的工具列表里（defaultActive: false + exposure: "model-only"）：
- * confirmIntent() 用 activateDevAsk() 在每轮复述前后临时加入/移除，
- * 避免它在无关会话里出现在工具列表和 system prompt 中。
+ * 用于需求澄清、方案取舍和 grilling 分轮追问，答案作为工具结果回到当前会话。
+ * 每轮把前置条件已明确的问题一次问完，收到答案后再组织依赖这些答案的下一轮。
+ * 保持 model-only，不允许其他工具间接调用。
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -34,7 +30,7 @@ const OptionSchema = Type.Object({
 
 const QuestionSchema = Type.Object({
 	header: Type.String({ maxLength: 16, description: "该问题的短标签，最多 16 字符" }),
-	question: Type.String({ description: "完整问题文本，以问号结尾" }),
+	question: Type.String({ description: "完整的决策问题，以问号结尾；仅询问前置条件已明确、当前可回答的问题" }),
 	options: Type.Array(OptionSchema, {
 		minItems: MIN_OPTIONS,
 		maxItems: MAX_OPTIONS,
@@ -45,7 +41,7 @@ const QuestionSchema = Type.Object({
 const DevAskParamsSchema = Type.Object({
 	questions: Type.Array(QuestionSchema, {
 		minItems: 1,
-		description: "本轮要问的全部关键问题，一次问完，不要连续多次调用",
+		description: "本轮前置条件已明确的全部关键问题，一次问完；依赖本轮答案的问题留到收到答案后的下一轮",
 	}),
 });
 
@@ -62,24 +58,17 @@ interface DevAskDetails {
 	cancelled: boolean;
 }
 
-const DEV_ASK_DESCRIPTION = `在意图识别轮次里，把「会影响实现方向、又无法从代码或需求推出」的不确定项做成题目问用户。
+const DEV_ASK_DESCRIPTION = `默认可用的结构化提问工具，用于需求澄清、方案取舍、用户偏好和 grilling 分轮追问，不依赖 /dev-pre-check。
 
 用法：
-- 每题给 ${MIN_OPTIONS}-${MAX_OPTIONS} 个选项，每个选项都要有 label（1-5 个词）和 description（含义或取舍）。
-- 详情区只显示当前高亮选项的 description 和可选 preview，并自动换行。
-- 需要对比具体布局、结构图、代码或配置时可提供 preview（Markdown 多行文本）；ASCII 图和代码请用代码块保留缩进与对齐，普通偏好问题不必提供预览。
-- 题目数量不限：把本轮该问的一次性问完，不要连续多次调用。
-- 只问关键决策：能从代码里查到的先自己查，不要问琐碎细节，也不要询问你自己的复述是否准确。
-- 用户可在任一题选「${CUSTOM_CHOICE}」自由作答，按 Esc 可放弃提问。
-- 把你推荐的那个选项放第一个，并在 label 末尾加「（推荐）」。`;
-
-/** 临时把 dev_ask 加进模型的工具列表，返回恢复函数。 */
-export function activateDevAsk(pi: ExtensionAPI): () => void {
-	const active = pi.getActiveTools();
-	if (active.includes(DEV_ASK_TOOL_NAME)) return () => {};
-	pi.setActiveTools([...active, DEV_ASK_TOOL_NAME]);
-	return () => pi.setActiveTools(pi.getActiveTools().filter((name) => name !== DEV_ASK_TOOL_NAME));
-}
+- 只问需要用户决定的关键问题：能从代码、文档或环境查到的事实先自己查，不要问琐碎细节或重复询问已回答的问题。
+- 每轮只询问前置条件已明确、当前可回答的问题，题数不限，一次调用问完；等待答案后再组织依赖这些答案的下一轮，不要提前猜测。
+- 在 grilling 技能指导下强烈推荐直接调用 dev_ask：每轮把设计树当前 frontier 的问题一起提交，收到答案后重算 frontier，再开展下一轮。
+- 每题给 ${MIN_OPTIONS}-${MAX_OPTIONS} 个互斥选项，每个选项都有 label（1-5 个词）和 description（含义或取舍）。推荐项放第一个，在 label 末尾加「（推荐）」。
+- 不要自行添加自定义输入或返回选项，界面会自动提供；用户可在任一题选「${CUSTOM_CHOICE}」自由作答，按 Esc 可放弃提问。
+- 详情区只显示当前高亮选项的 description 和可选 preview，并自动换行。对比布局、结构图、代码或配置时可提供 Markdown preview；ASCII 图和代码用代码块保留对齐，普通偏好问题不必提供预览。
+- 答案表示用户对所问决策的选择，不等于授权执行未被要求的操作；未作答不等于同意推荐项。当前会话没有交互界面时改用文字说明待决问题。
+- 工具仅供模型直接调用，不通过 codemode 或其他工具间接调用。`;
 
 function askQuestion(
 	ctx: ExtensionContext,
@@ -236,7 +225,7 @@ function formatResult(answers: AskAnswer[], cancelled: boolean): string {
 	if (cancelled) {
 		lines.push(
 			answered.length > 0 ? "用户随后按 Esc 放弃了剩余提问。" : "用户按 Esc 放弃了提问，没有提供答案。",
-			"未作答的问题按你的最佳判断处理，并在「不确定之处」中标注为开放问题。",
+			"未作答的问题仍是开放问题，不代表用户同意推荐项；列出待决问题，不要把它们当作已确认决策。",
 		);
 	} else {
 		lines.push("以上答案视为用户已确认的前提，不要就同一件事再次提问或臆测。");
@@ -249,9 +238,13 @@ const devAskTool = defineTool({
 	name: DEV_ASK_TOOL_NAME,
 	label: "Dev Ask",
 	description: DEV_ASK_DESCRIPTION,
-	promptSnippet: "就意图识别中的关键不确定项向用户提结构化问题（题目 + 2-4 个选项，题数不限）",
+	promptSnippet: "向用户提结构化问题，用于需求澄清、方案取舍与 grilling 分轮追问（每题 2-4 个选项，题数不限）",
+	promptGuidelines: [
+		"需要用户做关键决策时直接使用 dev_ask；能查到的事实先自己查，已回答的问题不要重复提问。",
+		"grilling 中强烈推荐每轮直接调用 dev_ask 问完当前 frontier，等待答案后再问依赖这些答案的问题，不通过 codemode 调用。",
+	],
 	exposure: "model-only",
-	defaultActive: false,
+	defaultActive: true,
 	parameters: DevAskParamsSchema,
 
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

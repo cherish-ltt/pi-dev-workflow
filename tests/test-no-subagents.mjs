@@ -183,8 +183,8 @@ assertIncludes("extensions/pre-check.ts", "ctx.isIdle()", "以代理空闲作为
 assertIncludes("extensions/pre-check.ts", "是 + 补充 — 补充说明后直接开工（不重新复述）", "确认环节提供「补充后直接开工」选项");
 assertIncludes("extensions/pre-check.ts", "否 — 意图不正确，我要补充说明后重新分析", "保留「补充后重新复述」选项");
 assertIncludes("extensions/pre-check.ts", "### 用户补充（已确认，直接采纳，不需重新复述）", "补充内容并入已确认意图");
-assertIncludes("extensions/pre-check.ts", "activateDevAsk(pi)", "复述轮次临时启用 dev_ask 提问工具");
-assertIncludes("extensions/pre-check.ts", "restoreAsk()", "复述轮次结束（含取消）还原工具列表");
+assertNotIncludes("extensions/pre-check.ts", "activateDevAsk", "意图校验不再临时激活 dev_ask");
+assertNotIncludes("extensions/pre-check.ts", "setActiveTools", "意图校验不修改默认工具列表");
 assertIncludes("extensions/pre-check.ts", "addAutocompleteProvider", "包一层补全 provider 做命令提权");
 assertIncludes("extensions/pre-check.ts", 'PRIORITY_COMMANDS = ["dev-pre-check"]', "只把 /dev-pre-check 列入优先命令");
 assertIncludes("extensions/pre-check.ts", "PRE_CHECK_MAX_WAIT_MS", "忙碌期间延长等待但有绝对上限");
@@ -195,16 +195,16 @@ assertNotIncludes("extensions/pre-check.ts", "./grill-me-agent", "不依赖 Gril
 assertNotIncludes("extensions/dev-prompts.ts", "dev-pre-check", "dev-prompts 不注册覆盖 pre-check 的命令");
 
 // ═══════════════════════════════════════════════════════════════
-//  7.5 dev_ask 内部提问工具
+//  7.5 dev_ask 默认可用的提问工具
 // ═══════════════════════════════════════════════════════════════
 
 console.log("\n📋 dev-ask.ts\n");
 
-assertExists("extensions/dev-ask.ts", "提供内部的 dev_ask 提问工具");
+assertExists("extensions/dev-ask.ts", "提供默认可用的 dev_ask 提问工具");
 assertIncludes("extensions/dev-ask.ts", 'export const DEV_ASK_TOOL_NAME = "dev_ask"', "工具名为 dev_ask");
-assertIncludes("extensions/dev-ask.ts", "export function activateDevAsk", "导出临时激活/还原工具列表的入口");
+assertNotIncludes("extensions/dev-ask.ts", "activateDevAsk", "移除临时激活/还原工具列表的入口");
 assertIncludes("extensions/dev-ask.ts", 'exposure: "model-only"', "dev_ask 只对模型声明、不被其他工具调用");
-assertIncludes("extensions/dev-ask.ts", "defaultActive: false", "dev_ask 默认不激活");
+assertIncludes("extensions/dev-ask.ts", "defaultActive: true", "dev_ask 默认激活");
 assertIncludes("extensions/dev-ask.ts", "maxItems: MAX_OPTIONS", "限制每题选项数量");
 assertIncludes("extensions/dev-ask.ts", "minItems: MIN_OPTIONS", "每题最少选项数");
 assertIncludes("extensions/dev-ask.ts", "CUSTOM_CHOICE", "每题附自定义输入入口");

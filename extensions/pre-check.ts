@@ -7,7 +7,7 @@
  *   1. 取用户原始 prompt（命令参数，缺省则弹输入框）
  *   2. 组合提示词 =「用户原始 prompt」+ 固定的「先只读探查代码库、再重述目标与问题」指令，
  *      并把本轮任务意图改成「只做意图理解，不产生任何实质改动」
- *   3. 复述轮次内临时启用 dev_ask 工具：模型把关键不确定项做成「题目 + 选项」问用户
+ *   3. 使用默认可用的 dev_ask 工具：模型把关键不确定项做成「题目 + 选项」问用户
  *   4. 等待代理给出复述（代理空闲 + 本轮新增的 assistant 文本）
  *   5. 用户确认意图：正确 → 开始真正的工作；补充 → 并入意图后直接开工（不重新复述）；
  *      不正确 → 补充说明后重新复述；取消 → 结束
@@ -22,7 +22,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteProvider } from "@earendil-works/pi-tui";
-import { DEV_ASK_TOOL_NAME, activateDevAsk } from "./dev-ask";
+import { DEV_ASK_TOOL_NAME } from "./dev-ask";
 import { uiInput, uiSelect } from "./ui-helpers";
 import { getLastAssistantTextAfter } from "./session-utils";
 
@@ -197,31 +197,26 @@ export async function confirmIntent(
 	pi: ExtensionAPI,
 ): Promise<string | undefined> {
 	const corrections: string[] = [];
-	const restoreAsk = activateDevAsk(pi);
 
-	try {
-		for (;;) {
-			ctx.ui.notify("正在让代理复述任务意图（只分析，不执行）...", "info");
-			const sentAt = Date.now();
-			pi.sendUserMessage(buildPreCheckPrompt(task, corrections), { deliverAs: "followUp" });
+	for (;;) {
+		ctx.ui.notify("正在让代理复述任务意图（只分析，不执行）...", "info");
+		const sentAt = Date.now();
+		pi.sendUserMessage(buildPreCheckPrompt(task, corrections), { deliverAs: "followUp" });
 
-			// 完成标志：代理空闲且本轮产生了新的 assistant 文本。
-			// 不依赖 waitForIdle —— 它可能在 followUp 触发的新 turn 开始前就返回。
-			const intent = await waitForRestatement(ctx, sentAt);
+		// 完成标志：代理空闲且本轮产生了新的 assistant 文本。
+		// 不依赖 waitForIdle —— 它可能在 followUp 触发的新 turn 开始前就返回。
+		const intent = await waitForRestatement(ctx, sentAt);
 
-			if (!intent) {
-				const retry = await uiSelect(ctx, "未获取到代理的意图复述", ["重试", "取消"]);
-				if (retry === "重试") continue;
-				return undefined;
-			}
-
-			const decision = await resolveDecision(ctx, intent);
-			if (!decision) return undefined;
-			if ("intent" in decision) return decision.intent;
-			corrections.push(decision.correction);
+		if (!intent) {
+			const retry = await uiSelect(ctx, "未获取到代理的意图复述", ["重试", "取消"]);
+			if (retry === "重试") continue;
+			return undefined;
 		}
-	} finally {
-		restoreAsk();
+
+		const decision = await resolveDecision(ctx, intent);
+		if (!decision) return undefined;
+		if ("intent" in decision) return decision.intent;
+		corrections.push(decision.correction);
 	}
 }
 

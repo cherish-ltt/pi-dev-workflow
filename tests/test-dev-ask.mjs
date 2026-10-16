@@ -15,6 +15,7 @@ try {
 	entry = pathToFileURL(path.join(globalModules, "@earendil-works/pi-coding-agent/dist/index.js")).href;
 }
 const { loadExtensions } = await import(new URL("./core/extensions/loader.js", entry));
+const { createAgentSession, SessionManager, SettingsManager } = await import(entry);
 const { initTheme, theme } = await import(new URL("./modes/interactive/theme/theme.js", entry));
 const require = createRequire(entry);
 const { visibleWidth, wrapTextWithAnsi } = await import(pathToFileURL(require.resolve("@earendil-works/pi-tui")));
@@ -84,8 +85,76 @@ test("schema exposes an optional Markdown preview and retains single-choice ques
 	assert.equal(questions.maxItems, undefined);
 	assert.equal(options.items.properties.preview.type, "string");
 	assert.ok(!options.items.required.includes("preview"));
-	assert.equal(tool.defaultActive, false);
+	assert.equal(tool.defaultActive, true);
 	assert.equal(tool.exposure, "model-only");
+});
+
+test("default sessions and reload declare dev_ask with general-purpose and grilling guidance", async () => {
+	let extensions = await loadExtensions([path.join(root, "extensions/dev-ask.ts")], root);
+	const resourceLoader = {
+		getExtensions: () => extensions,
+		getSkills: () => ({ skills: [], diagnostics: [] }),
+		getPrompts: () => ({ prompts: [], diagnostics: [] }),
+		getThemes: () => ({ themes: [], diagnostics: [] }),
+		getAgentsFiles: () => ({ agentsFiles: [] }),
+		getSystemPrompt: () => undefined,
+		getSystemPromptSource: () => undefined,
+		getAppendSystemPrompt: () => [],
+		getAppendSystemPromptSources: () => [],
+		extendResources() {},
+		async reload() {
+			extensions = await loadExtensions([path.join(root, "extensions/dev-ask.ts")], root);
+			assert.deepEqual(extensions.errors, []);
+		},
+	};
+	const { session } = await createAgentSession({
+		cwd: root,
+		resourceLoader,
+		sessionManager: SessionManager.inMemory(root),
+		settingsManager: SettingsManager.inMemory(),
+	});
+	try {
+		assert.ok(session.getActiveToolNames().includes("dev_ask"));
+		assert.ok(session.systemPrompt.includes("dev_ask"));
+		assert.ok(session.systemPrompt.includes("grilling"));
+		assert.ok(tool.description.includes("需求澄清"));
+		assert.ok(tool.parameters.properties.questions.description.includes("前置"));
+		await session.reload();
+		assert.ok(session.getActiveToolNames().includes("dev_ask"));
+		assert.ok(session.systemPrompt.includes("grilling"));
+	} finally {
+		session.dispose();
+	}
+});
+
+test("pre-check acceptance, cancellation and errors never manage the active tool list", async () => {
+	for (const decision of ["是 — 意图正确，开始执行", undefined, new Error("dialog failed")]) {
+		const extensions = await loadExtensions([path.join(root, "extensions/pre-check.ts")], root);
+		assert.deepEqual(extensions.errors, []);
+		const command = extensions.extensions[0].commands.get("dev-pre-check");
+		const messages = [];
+		const entries = [];
+		extensions.runtime.getActiveTools = () => assert.fail("pre-check must not inspect active tools");
+		extensions.runtime.setActiveTools = () => assert.fail("pre-check must not change active tools");
+		extensions.runtime.sendUserMessage = (content) => {
+			messages.push(content);
+			entries.push({ type: "message", timestamp: new Date(Date.now() + 1).toISOString(),
+				message: { role: "assistant", content: [{ type: "text", text: "已复述的意图" }] } });
+		};
+		const ctx = {
+			hasUI: true,
+			isIdle: () => true,
+			sessionManager: { getEntries: () => entries },
+			ui: { notify() {}, custom: () => decision instanceof Error ? Promise.reject(decision) : Promise.resolve(decision) },
+		};
+		if (decision instanceof Error) {
+			await assert.rejects(command.handler("测试任务", ctx), /dialog failed/);
+		} else {
+			await command.handler("测试任务", ctx);
+			assert.equal(messages.length, decision ? 2 : 1);
+			if (decision) assert.ok(messages[1].includes("已复述的意图"));
+		}
+	}
 });
 
 test("initial and navigated details only contain the highlighted option; ASCII alignment survives", async () => {
@@ -218,6 +287,7 @@ test("back navigation, custom answers and cancellation retain questionnaire sema
 	]);
 	assert.equal(cancelled.result.details.cancelled, true);
 	assert.deepEqual(cancelled.result.details.answers.map(({ answer }) => answer), ["方案甲", null]);
+	assert.ok(cancelled.result.content[0].text.includes("不代表用户同意推荐项"));
 });
 
 test("non-interactive sessions still report that no question was shown", async () => {
