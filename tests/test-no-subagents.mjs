@@ -212,6 +212,19 @@ assertIncludes("extensions/dev-ask.ts", "BACK_OPTION_TEXT", "复用 ui-helpers �
 assertNotIncludes("extensions/dev-ask.ts", "ask_user_question", "不依赖第三方 ask_user_question 插件");
 assertNotIncludes("extensions/dev-ask.ts", "typebox", "用 pi-ai 重导出的 Type，不直接依赖 typebox");
 
+console.log("\n📋 技能与使用文档\n");
+
+assertNotExists("skills/grill-with-docs/", "移除旧文档同步技能");
+assertExists("skills/grilling/SKILL.md", "新增 grilling 技能");
+assertIncludes("skills/grilling/SKILL.md", "Strongly prefer `dev_ask`", "grilling 强烈推荐 dev_ask");
+assertIncludes("skills/grilling/SKILL.md", "investigate it yourself with read-only tools", "grilling 由当前代理只读探查事实");
+assertNotIncludes("skills/grilling/SKILL.md", "dispatch a sub-agent", "grilling 不要求派发子代理");
+assertNotIncludes("README.md", "grill-with-docs", "README 不再介绍已删除技能");
+assertIncludes("README.md", "[grilling](https://github.com/mattpocock/skills)", "README 链接 grilling 来源");
+assertIncludes("README.md", "[rpiv-ask-user-question](https://github.com/juicesharp/rpiv-ask-user-question)", "README 链接问卷设计参考来源");
+assertNotIncludes("README.md", "pi install npm:@juicesharp/rpiv-ask-user-question", "README 不再推荐额外安装问卷插件");
+assertIncludes("README.md", "### 致谢", "README 包含来源致谢");
+
 // ═══════════════════════════════════════════════════════════════
 //  8. notify 调用使用合法类型
 // ═══════════════════════════════════════════════════════════════

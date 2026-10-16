@@ -31,8 +31,8 @@ pi-package/
 │   ├── review-commit.md             # 审查 commit 的提示模板
 │   └── review-diff.md              # 审查 diff 的提示模板
 ├── skills/
-│   ├── grill-with-docs/
-│   │   └── SKILL.md                 # 方案追问完善：挑战方案、统一术语、更新文档
+│   ├── grilling/
+│   │   └── SKILL.md                 # 设计树分轮追问，强烈推荐 dev_ask 收集决策
 │   ├── karpathy-guidelines/
 │   │   └── SKILL.md                 # Karpathy 编码准则（避免 LLM 常见错误）
 │   ├── review-html/
@@ -41,7 +41,7 @@ pi-package/
 │       └── SKILL.md                 # 从对话上下文生成 PRD 文档
 ├── extensions/
 │   ├── append-system.ts             # 追加 APPEND_SYSTEM.md 提示词
-│   ├── dev-ask.ts                   # dev_ask 工具（意图识别轮次里的「题目 + 选项」提问）
+│   ├── dev-ask.ts                   # 默认可用的结构化提问工具（澄清、取舍、分轮追问）
 │   ├── dev-prompts.ts               # dev 命令（/dev-feat、/dev-fix、/dev-refactor、/dev-test）
 │   ├── git-commands.ts              # git 命令（直接执行）
 │   ├── grill-me-agent.ts            # /grill 与 /prd 命令 + 运行时（运行在当前代理中）
@@ -68,7 +68,6 @@ pi-package/
 |---|---|---|
 | **pi-web-access** | 网页搜索、URL 抓取、GitHub 仓库克隆、PDF 提取、YouTube 视频理解与本地视频分析，支持多家搜索/内容服务提供商 | `pi install npm:pi-web-access` |
 | **pi-mcp-adapter** | MCP（Model Context Protocol）适配器扩展，让 Pi 接入 MCP 工具生态 | `pi install npm:pi-mcp-adapter`<br>**pi v0.99 起 MCP 已内置（`pi mcp add` / `/mcp`），无需再装此扩展** |
-| **rpiv-ask-user-question** | 结构化问卷扩展：模型不确定时以带类型的选项向你提问，替代自由文本回复 | `pi install npm:@juicesharp/rpiv-ask-user-question` |
 | **rpiv-todo** | 模型待办清单：实时悬浮面板展示，`/reload` 与会话压缩后依然保留 | `pi install npm:@juicesharp/rpiv-todo` |
 | **@plannotator/pi-extension** | 交互式方案评审扩展：带注释的方案审查，可标注 Agent 消息，审查代码/PR | `pi install npm:@plannotator/pi-extension` |
 | **pi-permission-system** | 权限管理系统 | `pi install npm:@gotgenes/pi-permission-system` |
@@ -88,6 +87,17 @@ pi-package/
 | `/git-push` | 推送到远程 |
 | `/git-commit-push [message]` | 暂存 + 提交 + 推送一键完成 |
 
+## 结构化提问（dev_ask）
+
+本包已内置类似 [rpiv-ask-user-question](https://github.com/juicesharp/rpiv-ask-user-question) 的交互式问卷功能，因此不再推荐额外安装该插件。感谢其提供的交互与预览设计参考。
+
+`dev_ask` 加载后默认供模型直接调用，适用于普通对话中的需求澄清、方案取舍、用户偏好和 `grilling` 分轮追问，不依赖 `/dev-pre-check`；意图校验结束或取消也不会移除它。它是工具而非斜杠命令，保持 `model-only`，不能通过 codemode 等其他工具间接调用。
+
+- 每题 2-4 个互斥选项，均附说明；推荐项在第一位，自动提供自由输入、返回上一题和 Esc 放弃。
+- 只展示当前高亮项的说明和可选 Markdown `preview`；支持说明换行、ASCII 代码块对齐、宽屏分栏、窄屏上下排列和 PgUp/PgDn 翻阅详情。
+- 每轮一次问完前置条件已明确的问题，收到答案后再问依赖这些答案的下一轮；查得到的事实先自己查，已回答的决策不重复询问。
+- 没有交互界面时不会弹出问卷；模型应把待决问题写入文字说明。未作答不代表同意推荐项，作答也不等于授权执行未被要求的操作。
+
 ## 意图预检（/dev-pre-check）
 
 在真正动手前插入一道「意图校验」闸门：先让 AI 用自己的话复述它理解的任务意图，**只有你确认正确后才开始执行**。适合需求描述含糊、或希望先对齐理解再让 AI 动代码的场景。
@@ -103,7 +113,7 @@ pi-package/
 1. **组合提示词** — `用户原始 prompt`（变动）+ 固定的「先只读探查代码库、再重述目标与问题」指令
 2. **先探索再复述** — 复述前要求用 read / grep / glob 等只读工具确认真实代码（入口文件、现有实现、相关测试、项目约定）；不臆测路径、接口签名与既有行为，未发现的概念要说明检索范围，且不做与需求无关的全库通读
 3. **只分析不执行** — 提示词把本轮任务意图限定为意图理解：禁止修改/创建/删除文件，禁止运行有副作用的命令（安装、构建、测试、git 写操作），禁止调用写入类工具（write、edit、bash 写操作），禁止输出代码/补丁/实施计划/解决方案
-4. **不确定项当场提问** — 复述轮次内临时启用 `dev_ask` 工具（`exposure: model-only`、默认不激活），模型把「会影响实现方向、又无法从代码或需求推出」的关键不确定项做成「题目 + 2-4 个选项」一次性问完（题数不限）；每题都带说明，并白送一个「✎ 自己输入…」可自由作答，后续题目可选「← 返回上一步」重答，Esc 放弃（放弃时模型按最佳判断处理并把它们标为开放问题）。从代码里查得到的自己查，不拿琐事打扰你
+4. **不确定项当场提问** — 使用默认可用的 `dev_ask` 工具（`exposure: model-only`），模型把「会影响实现方向、又无法从代码或需求推出」的关键不确定项做成「题目 + 2-4 个选项」一次性问完（题数不限）；每题都带说明，并白送一个「✎ 自己输入…」可自由作答，后续题目可选「← 返回上一步」重答，Esc 放弃（未作答的问题仍是开放问题，不代表同意推荐项）。从代码里查得到的自己查，不拿琐事打扰你
    选项详情只展示当前高亮项的说明和可选 `preview`，说明自动换行；宽界面左右分栏，窄界面上下排列。`preview` 支持 Markdown，ASCII 结构图、代码和配置可用代码块保留缩进与对齐。详情过长时用 PgUp/PgDn 翻页阅读。
 
 5. **输出复述** — 代理按固定格式给出：已核实的现状 / 用户的目标 / 试图解决的问题 / 不确定之处 / 一句话概括（第 4 节只列提问后仍未解决、以及不值得提问的项）
@@ -274,8 +284,21 @@ PRD 模板包含：Problem Statement、Solution、User Stories、Implementation 
 |---|---|---|
 | **karpathy-guidelines** | [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/andrej-karpathy-skills) | 基于 Andrej Karpathy 对 LLM 编码陷阱的观察，强调简洁、精准、可验证 |
 | **review-html** | 自制 | git diff / commit 审查，输出自包含的交互式 HTML 报告 |
-| **grill-with-docs** | [mattpocock/skills](https://github.com/mattpocock/skills) | 方案追问完善 — 挑战方案、统一术语、实时更新 CONTEXT.md 和 ADR |
+| **[grilling](https://github.com/mattpocock/skills)** | [mattpocock/skills](https://github.com/mattpocock/skills) | 按设计树分轮追问方案、决策或想法，每轮强烈推荐用 `dev_ask` 收集当前可回答的决策 |
 | **to-prd** | [mattpocock/skills](https://github.com/mattpocock/skills) | 从对话上下文和代码库理解生成 PRD，保存到 `.pi-dev-output/pi-prd/` |
+
+### grilling：分轮打磨方案
+
+```text
+/skill:grilling 帮我推敲邮箱密码登录方案
+```
+
+[grilling](https://github.com/mattpocock/skills) 将方案映射成设计树：每轮只询问前置条件已确定的决策（frontier），强烈推荐直接调用 `dev_ask` 一次收集本轮答案，再根据答案推进下一轮。事实由当前代理先用只读工具探查，不依赖子代理；所有分支达成共同理解、且用户明确确认后，才执行方案。该技能不再要求同步 CONTEXT.md 或 ADR。
+
+### 致谢
+
+- 感谢 [mattpocock/skills](https://github.com/mattpocock/skills) 提供 `grilling` 的设计树与分轮追问方法。
+- 感谢 [rpiv-ask-user-question](https://github.com/juicesharp/rpiv-ask-user-question) 提供结构化问卷和选项预览的设计参考；本包内置 `dev_ask`，无需为类似功能额外安装该插件。
 
 ## 自动审查
 
@@ -342,8 +365,8 @@ A: 使用 `Ctrl+Shift+←` 返回上一题（在选项列表和自定义输入�
 **Q: 自定义输入框中的键位有哪些？**
 A: `Enter` 确认提交，`Esc` 取消返回选项列表，`Ctrl+Shift+←` 返回上一题，`Ctrl+Shift+→` 跳过输入并继续，方向键 `←`/`→` 用于移动光标编辑已有文本。
 
-**Q: `grill-with-docs` skill 和 `/grill` 命令有什么区别？**
-A: `grill-with-docs` 是 skill（`/skill:grill-with-docs`），侧重领域术语统一和文档同步（更新 CONTEXT.md、创建 ADR）。`/grill` 侧重方案追问完善，不涉及文档持久化。
+**Q: `grilling` skill 和 `/grill` 命令有什么区别？**
+A: [grilling](https://github.com/mattpocock/skills) 是 skill（`/skill:grilling`），按决策依赖分轮追问，强烈推荐每轮用 `dev_ask`，等待用户确认共同理解后才执行。`/grill` 是独立命令，一次生成问题，通过自身 TUI 收集答案并将增强方案交给当前代理；它没有改为调用新技能。
 
 **Q: 自动审查可以关闭吗？**
 A: 检测到审查意图时选择"2. 不是审查"即可放行原消息给当前代理。如果需要完全关闭，可以在 `extensions/review-detect.ts` 中移除 `pi.on("input")` 的审查拦截逻辑。
@@ -357,8 +380,8 @@ A: 不会。意图校验阶段的提示词明确禁止修改/创建/删除文件
 **Q: `/dev-pre-check` 等不到复述怎么办？**
 A: 信号为「代理空闲且本轮产生了新的 assistant 文本」，空闲阶段等待上限 5 分钟。代理忙碌（执行工具、或在 `dev_ask` 上等你作答）时不计超时，但整个复述环节最多等 30 分钟。超时后弹出「重试 / 取消」供你决定。
 
-**Q: 不确定项提问会污染其他会话吗？**
-A: 不会。`dev_ask` 默认不激活（`defaultActive: false` + `exposure: "model-only"`），只有 `confirmIntent()` 在复述前后临时加入/移除模型工具列表；轮次结束（包括取消）一定还原。提示词里也说明：工具列表里没有 `dev_ask` 时就把不确定项写回文字。
+**Q: 不通过 `/dev-pre-check` 能使用 `dev_ask` 吗？**
+A: 能。`dev_ask` 默认激活并供模型直接调用，普通对话或 `/skill:grilling` 都可以使用；`/dev-pre-check` 不再管理它的激活状态，也不会在结束后移除。它保持 `model-only`，不能通过 codemode 间接调用，也没有独立的 `/dev-ask` 命令。
 
 **Q: `/dev-pre-check` 会触发 Grill 或 PRD 吗？**
 A: 不会。它与 `/grill`、`/prd` 完全独立；dev 命令也只是复用它的意图复述指令，不进入任何额外流程。
