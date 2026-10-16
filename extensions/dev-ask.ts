@@ -11,9 +11,10 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { defineTool, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "@earendil-works/pi-ai";
-import { BACK_OPTION_TEXT, uiInput, uiSelect, type SelectChoice } from "./ui-helpers";
+import { Key, Markdown, SelectList, matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { BACK_OPTION_TEXT, uiInput } from "./ui-helpers";
 
 export const DEV_ASK_TOOL_NAME = "dev_ask";
 
@@ -25,7 +26,10 @@ const CUSTOM_CHOICE = "✎ 自己输入…";
 
 const OptionSchema = Type.Object({
 	label: Type.String({ maxLength: 60, description: "选项标签，1-5 个词" }),
-	description: Type.String({ description: "该选项的含义或取舍，一句话" }),
+	description: Type.String({ description: "该选项的含义或取舍，详情区自动换行展示" }),
+	preview: Type.Optional(Type.String({
+		description: "可选的 Markdown 预览，随当前选项展示；ASCII 结构图、代码或配置请放在代码块中以保留缩进与对齐",
+	})),
 });
 
 const QuestionSchema = Type.Object({
@@ -62,6 +66,8 @@ const DEV_ASK_DESCRIPTION = `在意图识别轮次里，把「会影响实现方
 
 用法：
 - 每题给 ${MIN_OPTIONS}-${MAX_OPTIONS} 个选项，每个选项都要有 label（1-5 个词）和 description（含义或取舍）。
+- 详情区只显示当前高亮选项的 description 和可选 preview，并自动换行。
+- 需要对比具体布局、结构图、代码或配置时可提供 preview（Markdown 多行文本）；ASCII 图和代码请用代码块保留缩进与对齐，普通偏好问题不必提供预览。
 - 题目数量不限：把本轮该问的一次性问完，不要连续多次调用。
 - 只问关键决策：能从代码里查到的先自己查，不要问琐碎细节，也不要询问你自己的复述是否准确。
 - 用户可在任一题选「${CUSTOM_CHOICE}」自由作答，按 Esc 可放弃提问。
@@ -75,6 +81,106 @@ export function activateDevAsk(pi: ExtensionAPI): () => void {
 	return () => pi.setActiveTools(pi.getActiveTools().filter((name) => name !== DEV_ASK_TOOL_NAME));
 }
 
+function askQuestion(
+	ctx: ExtensionContext,
+	title: string,
+	question: DevAskQuestion,
+	backable: boolean,
+): Promise<string | undefined> {
+	const choices: Static<typeof OptionSchema>[] = [
+		...question.options,
+		{ label: CUSTOM_CHOICE, description: "输入自己的答案，不使用上述选项。" },
+	];
+	if (backable) choices.unshift({ label: BACK_OPTION_TEXT, description: "返回上一题并重新作答。" });
+
+	return ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
+		const selectList = new SelectList(
+			choices.map((choice, index) => ({ value: String(index), label: choice.label })),
+			choices.length,
+			{
+				selectedPrefix: (text) => theme.fg("accent", text),
+				selectedText: (text) => theme.fg("accent", text),
+				description: (text) => theme.fg("muted", text),
+				scrollInfo: (text) => theme.fg("dim", text),
+				noMatch: (text) => theme.fg("warning", text),
+			},
+		);
+		let detailOffset = 0;
+		let detailHeight = 1;
+		let detailLength = 0;
+		const previews = new Map<number, Markdown>();
+		selectList.onSelect = (item) => done(choices[Number(item.value)]!.label);
+		selectList.onCancel = () => done(undefined);
+		selectList.onSelectionChange = () => {
+			detailOffset = 0;
+		};
+
+		return {
+			render(width) {
+				const wide = width >= 80;
+				const leftWidth = wide ? Math.min(32, Math.floor(width * 0.35)) : width;
+				const detailWidth = wide ? width - leftWidth - 3 : width;
+				const innerWidth = Math.max(1, detailWidth - 4);
+				const titleLines = wrapTextWithAnsi(title, width).map((line) => theme.fg("accent", line));
+				const hintLines = wrapTextWithAnsi("↑↓ 导航 • Enter 选择 • Esc 取消 • PgUp/PgDn 翻阅详情", width)
+					.map((line) => theme.fg("dim", line));
+				const options = selectList.render(leftWidth);
+				const index = Number(selectList.getSelectedItem()!.value);
+				const choice = choices[index]!;
+				const content = [
+					...wrapTextWithAnsi(choice.label, innerWidth).map((line) => theme.fg("accent", line)),
+					"",
+					...wrapTextWithAnsi(choice.description, innerWidth).map((line) => theme.fg("text", line)),
+				];
+				if (choice.preview) {
+					let preview = previews.get(index);
+					if (!preview) {
+						preview = new Markdown(choice.preview, 0, 0, getMarkdownTheme());
+						previews.set(index, preview);
+					}
+					content.push("", ...preview.render(innerWidth));
+				}
+				detailLength = content.length;
+				detailHeight = Math.max(1, tui.terminal.rows - titleLines.length - hintLines.length - 6
+					- (wide ? 0 : options.length + 1));
+				detailOffset = Math.max(0, Math.min(detailOffset, detailLength - detailHeight));
+				const details = content.slice(detailOffset, detailOffset + detailHeight);
+				const panel = detailWidth < 4 ? details : [
+					theme.fg("border", `╭${"─".repeat(detailWidth - 2)}╮`),
+					...details.map((line) => {
+						const padding = " ".repeat(Math.max(0, detailWidth - 3 - visibleWidth(line)));
+						return `${theme.fg("border", "│")} ${line}${padding}${theme.fg("border", "│")}`;
+					}),
+					theme.fg("border", `╰${"─".repeat(detailWidth - 2)}╯`),
+				];
+				const body = wide
+					? Array.from({ length: Math.max(options.length, panel.length) }, (_, row) => {
+						const left = options[row] ?? "";
+						return `${left}${" ".repeat(leftWidth - visibleWidth(left) + 3)}${panel[row] ?? ""}`;
+					})
+					: [...options, "", ...panel];
+				const position = detailLength > detailHeight
+					? theme.fg("dim", `详情 ${detailOffset + 1}-${Math.min(detailLength, detailOffset + detailHeight)}/${detailLength}`)
+					: "";
+				return ["", ...titleLines, "", ...body, ...wrapTextWithAnsi(position, width), ...hintLines, ""];
+			},
+			invalidate() {
+				selectList.invalidate();
+				previews.clear();
+			},
+			handleInput(data) {
+				if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.pageDown)) {
+					const step = matchesKey(data, Key.pageUp) ? -detailHeight : detailHeight;
+					detailOffset = Math.max(0, Math.min(detailOffset + step, detailLength - detailHeight));
+				} else {
+					selectList.handleInput(data);
+				}
+				tui.requestRender();
+			},
+		};
+	});
+}
+
 /** 逐题弹「题目 + 选项」，可回上一题、可自由输入；Esc 放弃剩余的题。 */
 async function runQuestionnaire(
 	ctx: ExtensionContext,
@@ -84,12 +190,8 @@ async function runQuestionnaire(
 
 	for (let i = 0; i < questions.length; ) {
 		const question = questions[i]!;
-		const choices: SelectChoice[] = [
-			...question.options.map((option) => ({ label: option.label, description: option.description })),
-			CUSTOM_CHOICE,
-		];
 		const title = `不确定项 ${i + 1}/${questions.length}｜${question.header}\n${question.question}`;
-		const picked = await uiSelect(ctx, title, choices, i > 0);
+		const picked = await askQuestion(ctx, title, question, i > 0);
 
 		if (picked === undefined) {
 			return { answers: buildAnswers(questions, chosen), cancelled: true };
