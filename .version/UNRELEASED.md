@@ -9,8 +9,11 @@
 - 最终总结要求简单明了、避免堆砌专业词汇，推荐用表格对比前后变化；验证环节补充「先通读 diff 自我 review」。
 - 统一 `APPEND_SYSTEM.md` 的中英文空格与措辞，`skill` 说明改为作为指导内容读取。
 
+## 🧪 Tests
+- 回归断言覆盖复述格式（现状精简/推荐表格、目标与问题 1-5 句）、复述环节 15 分钟绝对上限，并新增全局规则章节校验「工作过程」与表格化最终总结。
+
 ## 📦 Files Changed
 
 | 类别 | 文件 |
 |---|---|
-| 修改 | `extensions/pre-check.ts`、`prompts/APPEND_SYSTEM.md` |
+| 修改 | `extensions/pre-check.ts`、`prompts/APPEND_SYSTEM.md`、`tests/test-no-subagents.mjs`、`README.md` |
