@@ -173,7 +173,9 @@ assertIncludes("extensions/pre-check.ts", 'registerCommand("dev-pre-check"', "�
 assertIncludes("extensions/pre-check.ts", "export async function confirmIntent", "导出共享的意图确认循环");
 assertIncludes("extensions/pre-check.ts", "export const READ_ONLY_EXPLORATION_RULES", "只读探查规则为共享导出");
 assertIncludes("extensions/pre-check.ts", "## 探索要求（先只读探查，再复述）", "复述前要求先只读探查代码库");
-assertIncludes("extensions/pre-check.ts", "### 1. 已核实的现状（探索结果）", "复述输出先交代已核实的现状");
+assertIncludes("extensions/pre-check.ts", "### 1. 已核实的现状（探索结果", "复述输出先交代已核实的现状");
+assertIncludes("extensions/pre-check.ts", "精简回复，避免长篇大论，推荐表格", "现状要求精简、优先用表格");
+assertIncludes("extensions/pre-check.ts", "（用自己的话，1-5 句）", "目标与问题复述长度放宽到 1-5 句");
 assertIncludes("extensions/pre-check.ts", "用自己的话重述你认为用户的目标是什么，以及用户试图解决的问题是什么", "固定指令：用自己的话重述目标与问题");
 assertIncludes("extensions/pre-check.ts", "[pre-check] 任务意图校验：只复述，不执行", "意图校验提示词声明只复述不执行");
 assertIncludes("extensions/pre-check.ts", "禁止修改、创建、删除任何文件", "约束禁止任何实质改动");
@@ -188,6 +190,7 @@ assertNotIncludes("extensions/pre-check.ts", "setActiveTools", "意图校验不�
 assertIncludes("extensions/pre-check.ts", "addAutocompleteProvider", "包一层补全 provider 做命令提权");
 assertIncludes("extensions/pre-check.ts", 'PRIORITY_COMMANDS = ["dev-pre-check"]', "只把 /dev-pre-check 列入优先命令");
 assertIncludes("extensions/pre-check.ts", "PRE_CHECK_MAX_WAIT_MS", "忙碌期间延长等待但有绝对上限");
+assertIncludes("extensions/pre-check.ts", "const PRE_CHECK_MAX_WAIT_MS = 15 * 60_000", "复述环节绝对上限为 15 分钟");
 assertIncludes("extensions/pre-check.ts", "async function waitForRestatement", "改用可感知忙碌状态的等待循环");
 assertNotIncludes("extensions/pre-check.ts", "import { pollFor", "不再用 pollFor 的绝对超时等复述");
 assertNotIncludes("extensions/pre-check.ts", "./dev-prompts", "不依赖 /dev-* 命令实现");
@@ -224,6 +227,12 @@ assertIncludes("README.md", "[grilling](https://github.com/mattpocock/skills)", 
 assertIncludes("README.md", "[rpiv-ask-user-question](https://github.com/juicesharp/rpiv-ask-user-question)", "README 链接问卷设计参考来源");
 assertNotIncludes("README.md", "pi install npm:@juicesharp/rpiv-ask-user-question", "README 不再推荐额外安装问卷插件");
 assertIncludes("README.md", "### 致谢", "README 包含来源致谢");
+
+console.log("\n📋 全局规则\n");
+
+assertIncludes("prompts/APPEND_SYSTEM.md", "### 工作过程", "全局规则包含工作过程流程");
+assertIncludes("prompts/APPEND_SYSTEM.md", "阅读->编写->审查->自审->检验->验证->最终", "工作过程给出完整步骤顺序");
+assertIncludes("prompts/APPEND_SYSTEM.md", "推荐表格展示前后变化更清晰", "最终总结推荐用表格对比前后表现");
 
 // ═══════════════════════════════════════════════════════════════
 //  8. notify 调用使用合法类型
