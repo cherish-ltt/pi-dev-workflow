@@ -17,7 +17,7 @@ pi install git:github.com/cherish-ltt/pi-dev-workflow
 然后 `/reload` 热加载即可使用所有功能。
 > [!NOTE]
 > - 本 pi-package 已移除子代理，不会与其他 pi-package 的子代理功能冲突。
-> - 本 pi-package 添加了 `APPEND_SYSTEM.md`，存在默认使用中文等特色设定，可自行修改 `prompts/APPEND_SYSTEM.md`。其中「思考过程」（审题→思考→汇总→验证→讨教→最终）与「工作过程」（阅读→编写→审查→自审→检验→验证→最终）是两套强制流程，最终总结要求用表格对比修改前后的可观察表现。
+> - 本 pi-package 添加了 `APPEND_SYSTEM.md`，存在默认使用中文等特色设定，可自行修改 `prompts/APPEND_SYSTEM.md`。其中「思考过程」（审题→思考→汇总→验证→讨教→最终）与「工作过程」（阅读→编写→审查→自审→检验→验证→最终）是两套强制流程，最终总结要求先给自我 review 结论，再用表格对比修改前后的可观察表现。
 
 ## 目录结构
 

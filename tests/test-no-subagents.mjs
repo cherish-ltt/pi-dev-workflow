@@ -233,6 +233,7 @@ console.log("\n📋 全局规则\n");
 assertIncludes("prompts/APPEND_SYSTEM.md", "### 工作过程", "全局规则包含工作过程流程");
 assertIncludes("prompts/APPEND_SYSTEM.md", "阅读->编写->审查->自审->检验->验证->最终", "工作过程给出完整步骤顺序");
 assertIncludes("prompts/APPEND_SYSTEM.md", "推荐表格展示前后变化更清晰", "最终总结推荐用表格对比前后表现");
+assertIncludes("prompts/APPEND_SYSTEM.md", "自我 review 结论：一句话说明本次改动是否符合要求", "最终总结要求先给自我 review 结论");
 
 // ═══════════════════════════════════════════════════════════════
 //  8. notify 调用使用合法类型
