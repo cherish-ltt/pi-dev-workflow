@@ -4,6 +4,10 @@
 
 > Developer workflow toolkit for [pi coding agent](https://pi.dev/): git commands, code review, dev commands, Karpathy guidelines, themes
 
+## 核心理念
+
+依靠可控的输入需求确认 + 必须的输出字段确认来维持 LLM 在多次相同/不同任务工作稳定且不偏离。
+
 ## 快速安装
 
 ```bash
