@@ -119,10 +119,10 @@ export function buildExecutionPrompt(originalPrompt: string, intent: string): st
 
 // ── 意图确认循环 ─────────────────────────────────────────────
 
-const PRE_CHECK_TIMEOUT_MS = 5 * 60_000;
+const PRE_CHECK_TIMEOUT_MS = 20 * 60_000;
 
 /** 整个复述环节的绝对上限：dev_ask 等交互期间不计时，但不能无限等下去。 */
-const PRE_CHECK_MAX_WAIT_MS = 15 * 60_000;
+const PRE_CHECK_MAX_WAIT_MS = 30 * 60_000;
 
 const OPT_ACCEPT = "是 — 意图正确，开始执行";
 const OPT_ACCEPT_WITH_NOTE = "是 + 补充 — 补充说明后直接开工（不重新复述）";
@@ -183,7 +183,7 @@ async function waitForRestatement(ctx: ExtensionCommandContext, sentAt: number):
 		} else {
 			deadline = Date.now() + PRE_CHECK_TIMEOUT_MS;
 		}
-		await new Promise((resolve) => setTimeout(resolve, 2_000));
+		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
 }
 

@@ -190,7 +190,11 @@ assertNotIncludes("extensions/pre-check.ts", "setActiveTools", "意图校验不�
 assertIncludes("extensions/pre-check.ts", "addAutocompleteProvider", "包一层补全 provider 做命令提权");
 assertIncludes("extensions/pre-check.ts", 'PRIORITY_COMMANDS = ["dev-pre-check"]', "只把 /dev-pre-check 列入优先命令");
 assertIncludes("extensions/pre-check.ts", "PRE_CHECK_MAX_WAIT_MS", "忙碌期间延长等待但有绝对上限");
-assertIncludes("extensions/pre-check.ts", "const PRE_CHECK_MAX_WAIT_MS = 15 * 60_000", "复述环节绝对上限为 15 分钟");
+assertIncludes("extensions/pre-check.ts", "const PRE_CHECK_MAX_WAIT_MS = 30 * 60_000", "复述环节绝对上限为 30 分钟");
+assertIncludes("extensions/pre-check.ts", "const PRE_CHECK_TIMEOUT_MS = 20 * 60_000", "空闲阶段等待上限为 20 分钟");
+assertIncludes("extensions/pre-check.ts", "setTimeout(resolve, 500)", "意图识别轮询间隔为 500ms");
+assertIncludes("extensions/session-utils.ts", "intervalMs = 500", "pollFor 默认轮询间隔为 500ms");
+assertIncludes("extensions/review-detect.ts", "setTimeout(r, 500)", "审查报告轮询间隔为 500ms");
 assertIncludes("extensions/pre-check.ts", "async function waitForRestatement", "改用可感知忙碌状态的等待循环");
 assertNotIncludes("extensions/pre-check.ts", "import { pollFor", "不再用 pollFor 的绝对超时等复述");
 assertNotIncludes("extensions/pre-check.ts", "./dev-prompts", "不依赖 /dev-* 命令实现");

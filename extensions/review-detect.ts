@@ -64,7 +64,7 @@ async function runReview(task: string, ctx: ExtensionContext, pi: ExtensionAPI):
 	while (Date.now() < deadline) {
 		filePath = findNewestReviewHtml(ctx.cwd, startTime);
 		if (filePath) break;
-		await new Promise((r) => setTimeout(r, 2_000));
+		await new Promise((r) => setTimeout(r, 500));
 	}
 
 	const dur = ((Date.now() - startTime) / 1000).toFixed(1);

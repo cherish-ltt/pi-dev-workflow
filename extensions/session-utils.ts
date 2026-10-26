@@ -114,7 +114,7 @@ export function defaultAcceptanceItems(d: ProjectDefaults): string[] {
  * 用于替代 "sendUserMessage 后再 waitForIdle" 的不可靠时序：
  * waitForIdle 可能在消息触发的新 turn 开始前立即返回，导致误判完成。
  */
-export async function pollFor<T>(poll: () => T | undefined | null, timeoutMs: number, intervalMs = 2_000): Promise<T | undefined> {
+export async function pollFor<T>(poll: () => T | undefined | null, timeoutMs: number, intervalMs = 500): Promise<T | undefined> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		const value = poll();
