@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/theme-schema.json",
+	"$schema": "https://pi.dev/schemas/theme.schema.json",
 	"name": "titanium",
 	"vars": {
 		"brushedTitanium": "#151820",
@@ -65,22 +65,7 @@
 		"thinkingMedium": "dimAluminum",
 		"thinkingHigh": "electricBlue",
 		"thinkingXhigh": "titaniumGold",
-		"bashMode": "readoutGreen",
-		"statusLineBg": "darkTitanium",
-		"statusLineSep": "subtleGray",
-		"statusLineModel": "electricBlue",
-		"statusLinePath": "brightAluminum",
-		"statusLineGitClean": "readoutGreen",
-		"statusLineGitDirty": "warningAmber",
-		"statusLineContext": "dimAluminum",
-		"statusLineSpend": "titaniumGold",
-		"statusLineStaged": "readoutGreen",
-		"statusLineDirty": "warningAmber",
-		"statusLineUntracked": "dimAluminum",
-		"statusLineOutput": "deepBlue",
-		"statusLineCost": "titaniumGold",
-		"statusLineSubagents": "electricBlue",
-		"pythonMode": "#f0c040"
+		"bashMode": "readoutGreen"
 	},
 	"export": {
 		"pageBg": "brushedTitanium",
