@@ -5,7 +5,7 @@
  *
  * 流程：
  *   1. 取用户原始 prompt（命令参数，缺省则弹输入框）
- *   2. 组合提示词 =「用户原始 prompt」+ 固定的「先只读探查代码库、再重述目标与问题」指令，
+ *   2. 组合提示词 =「用户原始 prompt」+ 每次读取的 prompt-check 技能指导，
  *      并把本轮任务意图改成「只做意图理解，不产生任何实质改动」
  *   3. 使用默认可用的 dev_ask 工具：模型把关键不确定项做成「题目 + 选项」问用户
  *   4. 等待代理给出复述（代理空闲 + 本轮新增的 assistant 文本）
@@ -22,62 +22,14 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteProvider } from "@earendil-works/pi-tui";
-import { DEV_ASK_TOOL_NAME } from "./dev-ask";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { uiInput, uiSelect } from "./ui-helpers";
 import { getLastAssistantTextAfter } from "./session-utils";
 
 // ── 提示词组装 ────────────────────────────────────────────────
 
-/**
- * 只读探查规则：复述（先看真实代码再总结）与 dev 命令（动手前先看真实代码）共用的同一份文案，
- * 保证「探索优先」在两个命令族里表述一致。
- */
-export const READ_ONLY_EXPLORATION_RULES = [
-	"- 用 read / grep / glob 等只读工具确认：入口文件、现有实现、相关测试、项目约定与配置。",
-	"- 不臆测文件路径、接口签名、依赖与既有行为。",
-	"- 相关概念在代码库中确实不存在时，明确写出「未发现」并交代检索范围（搜了什么、覆盖哪些目录）。",
-	"- 探查到足以支撑产出为止，不做与任务无关的全库通读。",
-];
-
-/** 固定的「意图复述」指令，与用户原始 prompt 组合成意图校验提示词。 */
-const RESTATE_INSTRUCTION = [
-	"## 你的任务",
-	"用自己的话重述你认为用户的目标是什么，以及用户试图解决的问题是什么。",
-	"",
-	"## 探索要求（先只读探查，再复述）",
-	"复述前必须先看真实代码，不要凭需求描述推测代码库现状。",
-	...READ_ONLY_EXPLORATION_RULES,
-	"",
-	"## 硬性约束（最高优先级）",
-	"- 本轮只做意图理解与复述，不执行任何实质工作。",
-	"- 禁止修改、创建、删除任何文件；禁止运行任何有副作用的命令（安装、构建、测试、git 写操作等）。",
-	"- 禁止调用写入类工具（如 write、edit，以及 bash 中的写操作）；只允许只读探查（如 read、grep）。",
-	"- 禁止输出代码、补丁、diff、实施计划、解决方案或改进建议。",
-	"- 不要用文字反问用户，也不要请求用户确认复述本身，不要给出下一步行动。",
-	`- 关键不确定项（会影响实现方向、又无法从代码或原始 prompt 推出）用 ${DEV_ASK_TOOL_NAME} 一次性提问：题目 + 2-4 个选项、每题带说明，题数不限；能从代码里查到的先自己查，不要问琐碎细节。`,
-	`- 若你的工具列表里没有 ${DEV_ASK_TOOL_NAME}，就把这些不确定项留在第 4 节的文字里，不要臆造工具。`,
-	"- 若原始 prompt 存在歧义或信息缺口，在「不确定之处」中明确指出，但不要替用户做决定。",
-	"",
-	"## 输出格式（严格遵循）",
-	"### 1. 已核实的现状（探索结果，精简回复，避免长篇大论，推荐表格）",
-	"（列出本轮真实读到/检索过的关键事实，每条带真实文件路径与符号名，如 `src/auth/login.ts:42` — 现有校验逻辑；未找到的内容写「未发现 …」并说明检索范围。与代码库无关时写「本需求不涉及代码库现状」）",
-	"",
-	"### 2. 用户的目标",
-	"（用自己的话，1-5 句）",
-	"",
-	"### 3. 用户试图解决的问题",
-	"（用自己的话，1-5 句）",
-	"",
-	"### 4. 不确定之处",
-	"（列出提问后仍未解决、以及不值得提问的不确定项；能靠只读探查消除的先查完再写，剩下的区分「已读代码确认」与「仅推测」；无则写「无」）",
-	"",
-	"### 5. 一句话概括",
-	"（一句话说清「用户想让我做什么」）",
-	"",
-	"复述完成后立即停止，等待用户确认意图。",
-].join("\n");
-
-/** 组装意图校验提示词：原始 prompt + 固定复述指令（+ 历史修正说明）。 */
+/** 组装意图校验提示词：原始 prompt + 技能指导（+ 历史修正说明）。 */
 export function buildPreCheckPrompt(originalPrompt: string, corrections: string[]): string {
 	const lines: string[] = [
 		"[pre-check] 任务意图校验：只复述，不执行",
@@ -85,7 +37,10 @@ export function buildPreCheckPrompt(originalPrompt: string, corrections: string[
 		"## 用户原始 prompt（原文）",
 		originalPrompt,
 		"",
-		RESTATE_INSTRUCTION,
+		"## prompt-check 技能指导",
+		readFileSync(join(__dirname, "..", "skills", "prompt-check", "SKILL.md"), "utf-8"),
+		"",
+		"本轮只执行技能的确认前只读分析；关键问题优先使用 dev_ask。报告完成后立即停止，由命令界面负责确认，不要自行请求确认或执行任务。",
 	];
 
 	if (corrections.length > 0) {

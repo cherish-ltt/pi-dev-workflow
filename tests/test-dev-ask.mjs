@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -154,6 +156,49 @@ test("pre-check acceptance, cancellation and errors never manage the active tool
 			assert.equal(messages.length, decision ? 2 : 1);
 			if (decision) assert.ok(messages[1].includes("已复述的意图"));
 		}
+	}
+});
+
+test("all dev commands load the current bundled prompt-check skill before confirmation", async () => {
+	const temp = mkdtempSync(path.join(tmpdir(), "pi-pre-check-"));
+	try {
+		cpSync(path.join(root, "extensions"), path.join(temp, "extensions"), { recursive: true });
+		mkdirSync(path.join(temp, "skills", "prompt-check"), { recursive: true });
+		const skill = path.join(temp, "skills", "prompt-check", "SKILL.md");
+		const original = readFileSync(path.join(root, "skills", "prompt-check", "SKILL.md"), "utf8");
+		writeFileSync(skill, original);
+		const extensions = await loadExtensions([
+			path.join(temp, "extensions/pre-check.ts"), path.join(temp, "extensions/dev-prompts.ts"),
+		], temp);
+		assert.deepEqual(extensions.errors, []);
+		for (const name of ["dev-pre-check", "dev-feat", "dev-fix", "dev-refactor", "dev-test"]) {
+			const marker = `skill revision for ${name}`;
+			writeFileSync(skill, `${original}\n${marker}\n`);
+			const messages = [];
+			const entries = [];
+			extensions.runtime.sendUserMessage = (content) => {
+				messages.push(content);
+				entries.push({ type: "message", timestamp: new Date(Date.now() + 1).toISOString(),
+					message: { role: "assistant", content: [{ type: "text", text: "已复述" }] } });
+			};
+			const ctx = { cwd: temp, hasUI: true, isIdle: () => true,
+				sessionManager: { getEntries: () => entries },
+				ui: { notify() {}, custom: () => Promise.resolve(undefined) } };
+			const command = extensions.extensions.flatMap((extension) => [...extension.commands.values()])
+				.find((item) => item.name === name);
+			await command.handler("测试任务", ctx);
+			assert.equal(messages.length, 1, `${name} must stop on cancellation`);
+			assert.ok(messages[0].includes(marker), `${name} must load the latest skill`);
+			assert.ok(messages[0].includes("测试任务"));
+		}
+		rmSync(skill);
+		const command = extensions.extensions[0].commands.get("dev-pre-check");
+		let sent = false;
+		extensions.runtime.sendUserMessage = () => { sent = true; };
+		await assert.rejects(command.handler("测试任务", { hasUI: true, ui: { notify() {} } }), /ENOENT/);
+		assert.equal(sent, false, "a missing skill must stop before sending the task");
+	} finally {
+		rmSync(temp, { recursive: true, force: true });
 	}
 });
 

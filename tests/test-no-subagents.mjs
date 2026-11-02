@@ -5,12 +5,12 @@
  *
  * 覆盖：
  *   1. 子代理基础设施已删除
- *   2. dev 命令：4 个命令、参数即任务、意图识别复用 pre-check、只读探查规则共享、不再绑定 Grill/PRD
+ *   2. dev 命令：4 个命令、参数即任务、意图识别复用 pre-check、读取 prompt-check 技能、不再绑定 Grill/PRD
  *   3. 自动审查检测独立为 review-detect.ts
  *   4. git 命令直接执行，不再委派给子代理
  *   5. /grill 与 /prd 是独立命令
  *   6. UI 组件与输出目录约定
- *   7. /dev-pre-check 意图校验（confirmIntent、只读探查规则为共享实现）
+ *   7. /dev-pre-check 意图校验（confirmIntent、读取技能指导）
  *   8. notify 调用使用合法类型（info / warning / error）
  *   9. 当前版本的 RELEASE 说明覆盖该版本区间内的全部 commit
  */
@@ -82,8 +82,6 @@ assertNotIncludes("extensions/dev-prompts.ts", "runPRDPhase", "不再触发 PRD 
 assertNotIncludes("extensions/dev-prompts.ts", "WizardQuestion", "向导式提问已移除");
 assertIncludes("extensions/dev-prompts.ts", 'from "./pre-check"', "意图识别复用 pre-check");
 assertIncludes("extensions/dev-prompts.ts", "confirmIntent(", "调用 pre-check 导出的共享意图确认循环");
-assertIncludes("extensions/dev-prompts.ts", "READ_ONLY_EXPLORATION_RULES", "dev 命令复用同一份只读探查规则");
-assertIncludes("extensions/dev-prompts.ts", "## 探索要求（先只读探查，再动手）", "提示词包含探索要求段");
 assertIncludes("extensions/dev-prompts.ts", "uiTaskArg(ctx, args", "任务原文来自命令参数，缺省才弹输入框");
 assertIncludes("extensions/dev-prompts.ts", "detectProjectDefaults", "默认验收标准来自项目探测");
 assertIncludes("extensions/dev-prompts.ts", "defaultAcceptanceItems", "默认验收标准按条目生成");
@@ -171,14 +169,7 @@ console.log("\n📋 pre-check.ts\n");
 assertExists("extensions/pre-check.ts", "提供独立的 pre-check 扩展");
 assertIncludes("extensions/pre-check.ts", 'registerCommand("dev-pre-check"', "注册 /dev-pre-check 命令");
 assertIncludes("extensions/pre-check.ts", "export async function confirmIntent", "导出共享的意图确认循环");
-assertIncludes("extensions/pre-check.ts", "export const READ_ONLY_EXPLORATION_RULES", "只读探查规则为共享导出");
-assertIncludes("extensions/pre-check.ts", "## 探索要求（先只读探查，再复述）", "复述前要求先只读探查代码库");
-assertIncludes("extensions/pre-check.ts", "### 1. 已核实的现状（探索结果", "复述输出先交代已核实的现状");
-assertIncludes("extensions/pre-check.ts", "精简回复，避免长篇大论，推荐表格", "现状要求精简、优先用表格");
-assertIncludes("extensions/pre-check.ts", "（用自己的话，1-5 句）", "目标与问题复述长度放宽到 1-5 句");
-assertIncludes("extensions/pre-check.ts", "用自己的话重述你认为用户的目标是什么，以及用户试图解决的问题是什么", "固定指令：用自己的话重述目标与问题");
 assertIncludes("extensions/pre-check.ts", "[pre-check] 任务意图校验：只复述，不执行", "意图校验提示词声明只复述不执行");
-assertIncludes("extensions/pre-check.ts", "禁止修改、创建、删除任何文件", "约束禁止任何实质改动");
 assertIncludes("extensions/pre-check.ts", "pi.sendUserMessage(buildExecutionPrompt", "确认通过后才发送执行提示词");
 assertIncludes("extensions/pre-check.ts", "buildExecutionPrompt(originalPrompt: string, intent: string)", "执行提示词携带已确认的意图复述");
 assertIncludes("extensions/pre-check.ts", "ctx.isIdle()", "以代理空闲作为复述完成信号之一");
@@ -222,6 +213,8 @@ assertNotIncludes("extensions/dev-ask.ts", "typebox", "用 pi-ai 重导出的 Ty
 console.log("\n📋 技能与使用文档\n");
 
 assertNotExists("skills/grill-with-docs/", "移除旧文档同步技能");
+assertExists("skills/prompt-check/SKILL.md", "提供 prompt-check 技能");
+assertExists("skills/project-audit-review/SKILL.md", "提供 project-audit-review 技能");
 assertExists("skills/grilling/SKILL.md", "新增 grilling 技能");
 assertIncludes("skills/grilling/SKILL.md", "Strongly prefer `dev_ask`", "grilling 强烈推荐 dev_ask");
 assertIncludes("skills/grilling/SKILL.md", "investigate it yourself with read-only tools", "grilling 由当前代理只读探查事实");
@@ -234,10 +227,10 @@ assertIncludes("README.md", "### 致谢", "README 包含来源致谢");
 
 console.log("\n📋 全局规则\n");
 
-assertIncludes("prompts/APPEND_SYSTEM.md", "### 工作过程", "全局规则包含工作过程流程");
-assertIncludes("prompts/APPEND_SYSTEM.md", "阅读->编写->审查->自审->检验->验证->最终", "工作过程给出完整步骤顺序");
-assertIncludes("prompts/APPEND_SYSTEM.md", "推荐表格展示前后变化更清晰", "最终总结推荐用表格对比前后表现");
-assertIncludes("prompts/APPEND_SYSTEM.md", "自我 review 结论：一句话说明本次改动是否符合要求", "最终总结要求先给自我 review 结论");
+assertIncludes("prompts/APPEND_SYSTEM.md", "## 3. 执行流程", "全局规则包含执行流程");
+assertIncludes("prompts/APPEND_SYSTEM.md", "阅读 → 编写 → 审查 → 自审 → 检验 → 验证 → 最终", "工作过程给出完整步骤顺序");
+assertIncludes("prompts/APPEND_SYSTEM.md", "优先用简表说明同一操作或输入在修改前后的可观察差异", "最终总结推荐用表格对比前后表现");
+assertIncludes("prompts/APPEND_SYSTEM.md", "**自我 Review**：一句话说明是否符合需求及遗留风险", "最终总结要求先给自我 review 结论");
 
 // ═══════════════════════════════════════════════════════════════
 //  8. notify 调用使用合法类型
