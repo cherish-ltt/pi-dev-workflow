@@ -2,12 +2,12 @@
  * grill-me-agent.ts — 设计追问（Grill）与 PRD 生成的运行时（运行在当前代理中）
  *
  * 职责：
- *   1. 注册 /grill 命令 — 对方案做追问式打磨，保存问答并可选交给当前代理
+ *   1. 注册 /grill 与 /grill-resume 命令 — 打磨方案、暂停恢复、保存问答并可选交给当前代理
  *   2. 注册 /prd 命令   — 按需求描述生成 PRD，保存到 .pi-dev-output/pi-prd/
  *   3. runGrillPhase()  — 由当前代理生成评审问题，TUI 逐题呈现（选项 + 自定义输入）
  *   4. runPRDPhase()    — 由当前代理生成 PRD，并询问是否立即开始开发
  *
- * 两个命令各自独立，不依附于 /dev-* 命令。
+ * 这些命令不依附于 /dev-* 命令。
  *
  * 与旧版的区别：不再创建隔离的子代理进程，而是把追问/PRD 任务交给当前代理执行。
  * 当前模型普遍具备 >=1M 上下文窗口，无需通过子代理隔离上下文。
@@ -19,6 +19,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
@@ -48,10 +49,21 @@ export interface GrillQuestion {
 export interface GrillResult {
 	/** Whether the user cancelled. */
 	cancelled: boolean;
+	paused?: boolean;
 	/** The Q&A pairs collected. */
 	pairs: Array<{ question: string; answer: string }>;
 	/** Final enriched prompt (original prompt + all Q&A). */
 	enhancedPrompt: string;
+}
+
+interface GrillDraft {
+	version: 1;
+	projectPath: string;
+	savedAt: string;
+	plan: string;
+	questions: GrillQuestion[];
+	pairs: GrillResult["pairs"];
+	currentIndex: number;
 }
 
 /** Result of the PRD phase. */
@@ -68,6 +80,8 @@ const DEV_OUTPUT_DIR = ".pi-dev-output";
 const GRILL_DIRNAME = "pi-grill";
 const GRILL_ANSWERS_DIRNAME = "answers";
 const GRILL_QUESTIONS_DIRNAME = "questions";
+const GRILL_DRAFT_PATH = path.join(DEV_OUTPUT_DIR, GRILL_DIRNAME, "draft.json");
+const PAUSE_GRILL = Symbol("pause");
 const PRD_DIRNAME = "pi-prd";
 
 /** Ensure an output subdirectory exists. */
@@ -105,6 +119,60 @@ export function saveAnswerFile(cwd: string, content: string): string {
 	const filename = `answer-${ts}-${formatTimestamp()}.md`;
 	fs.writeFileSync(path.join(dir, filename), content, "utf-8");
 	return path.join(DEV_OUTPUT_DIR, GRILL_DIRNAME, GRILL_ANSWERS_DIRNAME, filename);
+}
+
+function readDraftContent(cwd: string): string | undefined {
+	try {
+		return fs.readFileSync(path.join(cwd, GRILL_DRAFT_PATH), "utf-8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+function validateGrillDraft(value: unknown, cwd: string): GrillDraft {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("草稿格式无效");
+	const draft = value as Record<string, unknown>;
+	if (draft.version !== 1) throw new Error("不支持的草稿版本");
+	if (draft.projectPath !== fs.realpathSync(cwd)) throw new Error("草稿所属项目与当前项目不匹配");
+	if (Object.keys(draft).sort().join(",") !== "currentIndex,pairs,plan,projectPath,questions,savedAt,version"
+		|| typeof draft.savedAt !== "string" || !Number.isFinite(Date.parse(draft.savedAt))
+		|| new Date(draft.savedAt).toISOString() !== draft.savedAt
+		|| typeof draft.plan !== "string" || !draft.plan.trim()
+		|| !Array.isArray(draft.questions) || draft.questions.length === 0
+		|| !Array.isArray(draft.pairs) || draft.pairs.length > draft.questions.length
+		|| !Number.isSafeInteger(draft.currentIndex) || (draft.currentIndex as number) < 0
+		|| (draft.currentIndex as number) > draft.pairs.length) throw new Error("草稿字段或问答位置无效");
+	const questions = draft.questions as GrillQuestion[];
+	if (!questions.every((question) => question && typeof question === "object"
+		&& Object.keys(question).sort().join(",") === "id,options,question"
+		&& Number.isSafeInteger(question.id) && typeof question.question === "string" && question.question.trim()
+		&& Array.isArray(question.options) && question.options.length > 0
+		&& question.options.every((option) => typeof option === "string" && option.trim()))
+		|| new Set(questions.map((question) => question.id)).size !== questions.length
+		|| !draft.pairs.every((pair, index) => pair && typeof pair === "object"
+			&& Object.keys(pair).sort().join(",") === "answer,question"
+			&& pair.question === questions[index].question && typeof pair.answer === "string" && pair.answer.trim())) {
+		throw new Error("草稿题目、选项或答案对应关系无效");
+	}
+	return draft as unknown as GrillDraft;
+}
+
+function writeGrillDraft(cwd: string, draft: GrillDraft): void {
+	validateGrillDraft(draft, cwd);
+	const directory = ensureOutputDir(cwd, GRILL_DIRNAME);
+	const temporaryPath = path.join(directory, `.draft-${randomUUID()}.tmp`);
+	try {
+		fs.writeFileSync(temporaryPath, JSON.stringify(draft, null, 2) + "\n", { encoding: "utf-8", flag: "wx", mode: 0o600 });
+		fs.renameSync(temporaryPath, path.join(cwd, GRILL_DRAFT_PATH));
+	} catch (error) {
+		try {
+			fs.rmSync(temporaryPath, { force: true });
+		} catch (cleanupError) {
+			throw new Error(`${String(error)}；临时草稿清理失败：${String(cleanupError)}`);
+		}
+		throw error;
+	}
 }
 
 /** Generate a safe PRD filename. */
@@ -452,18 +520,53 @@ export async function runGrillPhase(
 		}
 	}
 
-	// ── Step 5: TUI — present questions one by one (with back support) ──
-	const pairs: Array<{ question: string; answer: string }> = [];
-	let qIdx = 0;
+	return runGrillQuestions(assembledPrompt, questions, ctx, qTitlePrefix);
+}
+
+async function runGrillQuestions(
+	plan: string,
+	questions: GrillQuestion[],
+	ctx: ExtensionCommandContext,
+	title: string,
+	resume?: { draft: GrillDraft; content: string },
+): Promise<GrillResult> {
+	const pairs = resume ? resume.draft.pairs.map((pair) => ({ ...pair })) : [];
+	let qIdx = resume?.draft.currentIndex ?? 0;
 
 	while (qIdx >= 0 && qIdx < questions.length) {
 		const q = questions[qIdx]!;
 		const previousAnswer = pairs[qIdx]?.answer;
-		const answer = await showQuestionTUI(ctx, q, qIdx + 1, questions.length, qTitlePrefix,
+		const answer = await showQuestionTUI(ctx, q, qIdx + 1, questions.length, title,
 			qIdx > 0, previousAnswer);
 
 		if (answer === null) {
-			return { ...defaultResult, cancelled: true, pairs };
+			return { cancelled: true, pairs, enhancedPrompt: plan };
+		}
+
+		if (answer === PAUSE_GRILL) {
+			try {
+				const existingContent = readDraftContent(ctx.cwd);
+				if (existingContent !== undefined && existingContent !== resume?.content) {
+					const choice = await uiSelect(ctx,
+						`已有草稿：${GRILL_DRAFT_PATH}。保留后可取消当前问卷，再用 /grill-resume 恢复。`,
+						["保留已有草稿，继续当前问卷", "替换为当前问卷并暂停"]);
+					if (choice !== "替换为当前问卷并暂停") continue;
+				}
+				writeGrillDraft(ctx.cwd, {
+					version: 1,
+					projectPath: fs.realpathSync(ctx.cwd),
+					savedAt: new Date().toISOString(),
+					plan,
+					questions,
+					pairs,
+					currentIndex: qIdx,
+				});
+				ctx.ui.notify(`问卷已暂停并保存：${GRILL_DRAFT_PATH}（当前第 ${qIdx + 1}/${questions.length} 题，已答 ${pairs.length} 题）。在本项目使用 /grill-resume 继续。`, "info");
+				return { cancelled: false, paused: true, pairs, enhancedPrompt: plan };
+			} catch (error) {
+				ctx.ui.notify(`草稿保存失败，仍停留当前题，之前的草稿未替换：${error instanceof Error ? error.message : String(error)}`, "error");
+				continue;
+			}
 		}
 
 		if (answer === "__BACK__") {
@@ -471,7 +574,7 @@ export async function runGrillPhase(
 				qIdx--;
 				continue;
 			}
-			return { ...defaultResult, cancelled: true, pairs };
+			return { cancelled: true, pairs, enhancedPrompt: plan };
 		}
 
 		if (qIdx < pairs.length) {
@@ -482,13 +585,12 @@ export async function runGrillPhase(
 		qIdx++;
 	}
 
-	// ── Step 6: Assemble enhanced prompt ─────────────────────
 	const qaBlock = pairs
 		.map((p, i) => `[追问问题 ${i + 1}]\n问题: ${p.question}\n回答: ${p.answer}`)
 		.join("\n\n");
 
 	const finalEnhancedPrompt = [
-		assembledPrompt,
+		plan,
 		"",
 		"---",
 		"## 方案追问记录",
@@ -503,6 +605,49 @@ export async function runGrillPhase(
 		pairs,
 		enhancedPrompt: finalEnhancedPrompt,
 	};
+}
+
+async function completeGrill(
+	result: GrillResult,
+	ctx: ExtensionCommandContext,
+	pi: ExtensionAPI,
+	draftContent?: string,
+): Promise<void> {
+	if (result.paused) return;
+	if (result.cancelled) {
+		ctx.ui.notify("已取消追问，本轮新增进度未保存，已有草稿未作修改；未发送执行方案的请求", "info");
+		return;
+	}
+	if (result.pairs.length === 0) {
+		ctx.ui.notify("未完成追问，未发送执行方案的请求", "info");
+		return;
+	}
+
+	let answerPath: string;
+	try {
+		answerPath = saveAnswerFile(ctx.cwd, result.enhancedPrompt);
+	} catch (error) {
+		ctx.ui.notify(`方案保存失败，草稿未作修改，未发送执行请求：${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+	ctx.ui.notify(`完整方案已保存：${answerPath}`, "info");
+	if (draftContent !== undefined) {
+		try {
+			const currentContent = readDraftContent(ctx.cwd);
+			if (currentContent === draftContent) fs.unlinkSync(path.join(ctx.cwd, GRILL_DRAFT_PATH));
+			else if (currentContent !== undefined) ctx.ui.notify(`草稿已变化，保留当前文件：${GRILL_DRAFT_PATH}`, "warning");
+		} catch (error) {
+			ctx.ui.notify(`完整方案已归档，但草稿清理失败：${error instanceof Error ? error.message : String(error)}`, "error");
+		}
+	}
+	const choice = await uiSelect(ctx, `追问完成，归档：${answerPath}`, ["仅保存", "保存并发送"]);
+	if (choice !== "保存并发送") return;
+	try {
+		pi.sendUserMessage(result.enhancedPrompt, { deliverAs: "followUp" });
+		ctx.ui.notify(`已请求向当前代理发送方案；归档保留：${answerPath}。若 Pi 报告发送失败，可从该文件重试。`, "info");
+	} catch (error) {
+		ctx.ui.notify(`方案发送失败：${error instanceof Error ? error.message : String(error)}。归档已保留：${answerPath}`, "error");
+	}
 }
 
 /**
@@ -521,7 +666,7 @@ async function showQuestionTUI(
 	titlePrefix = "设计方案追问完善",
 	backable = false,
 	previousAnswer?: string,
-): Promise<string | null> {
+): Promise<string | typeof PAUSE_GRILL | null> {
 	// 根据终端宽度计算截断宽度
 	const termWidth = process.stdout.columns || 120;
 	const maxOptWidth = Math.min(termWidth - 12, 100);
@@ -552,6 +697,7 @@ async function showQuestionTUI(
 			label: "← 返回上一题",
 		});
 	}
+	selectItems.push({ value: "__pause__", label: "暂停并保存草稿" });
 
 	const title = `${titlePrefix} (问题 ${currentIndex}/${totalCount})`;
 
@@ -630,6 +776,7 @@ async function showQuestionTUI(
 	});
 
 	if (value === "__back__") return "__BACK__";
+	if (value === "__pause__") return PAUSE_GRILL;
 	if (value === null) return null;
 	if (value === "__custom__") {
 		const custom = await uiInput(ctx, "✏️ 自定义回答",
@@ -799,31 +946,43 @@ export default function (pi: ExtensionAPI) {
 				description: "AI 会针对方案逐题追问：术语精确化、边界条件、失败路径、验证方式。",
 				questionTitle: "方案追问完善",
 			});
-			if (result.cancelled) {
-				ctx.ui.notify("已取消追问，未发送执行方案的请求", "info");
-				return;
-			}
-			if (result.pairs.length === 0) {
-				ctx.ui.notify("未完成追问，未发送执行方案的请求", "info");
-				return;
-			}
+			await completeGrill(result, ctx, pi);
+		},
+	});
 
-			let answerPath: string;
-			try {
-				answerPath = saveAnswerFile(ctx.cwd, result.enhancedPrompt);
-			} catch (error) {
-				ctx.ui.notify(`方案保存失败，未发送执行请求：${error instanceof Error ? error.message : String(error)}`, "error");
+	pi.registerCommand("grill-resume", {
+		description: "(grill-resume) 恢复本项目主动保存的追问草稿",
+		handler: async (_args, ctx) => {
+			if (!ctx.hasUI) {
+				ctx.ui.notify("/grill-resume 需要交互式界面", "error");
 				return;
 			}
-			ctx.ui.notify(`完整方案已保存：${answerPath}`, "info");
-			const choice = await uiSelect(ctx, `追问完成，归档：${answerPath}`, ["仅保存", "保存并发送"]);
-			if (choice !== "保存并发送") return;
+			let content: string;
+			let draft: GrillDraft;
 			try {
-				pi.sendUserMessage(result.enhancedPrompt, { deliverAs: "followUp" });
-				ctx.ui.notify(`已请求向当前代理发送方案；归档保留：${answerPath}。若 Pi 报告发送失败，可从该文件重试。`, "info");
+				const savedContent = readDraftContent(ctx.cwd);
+				if (savedContent === undefined) {
+					ctx.ui.notify(`没有已保存的追问草稿：${GRILL_DRAFT_PATH}`, "info");
+					return;
+				}
+				content = savedContent;
+				draft = validateGrillDraft(JSON.parse(content), ctx.cwd);
 			} catch (error) {
-				ctx.ui.notify(`方案发送失败：${error instanceof Error ? error.message : String(error)}。归档已保留：${answerPath}`, "error");
+				ctx.ui.notify(`无法恢复草稿：${error instanceof Error ? error.message : String(error)}。文件未作修改：${GRILL_DRAFT_PATH}`, "error");
+				return;
 			}
+			const position = draft.currentIndex === draft.questions.length
+				? "全部问题已答，恢复后进入保存/发送选择"
+				: `当前第 ${draft.currentIndex + 1}/${draft.questions.length} 题`;
+			const confirmed = await uiConfirm(ctx, "恢复追问草稿", [
+				`原方案：${draft.plan.slice(0, 240)}${draft.plan.length > 240 ? "…" : ""}`,
+				`保存时间：${draft.savedAt}`,
+				`${position}；已答 ${draft.pairs.length}/${draft.questions.length} 题。`,
+				"恢复历史问答，不会重新出题；请自行确认历史判断仍符合当前项目。",
+			].join("\n"));
+			if (!confirmed) return;
+			const result = await runGrillQuestions(draft.plan, draft.questions, ctx, "方案追问完善", { draft, content });
+			await completeGrill(result, ctx, pi, content);
 		},
 	});
 
