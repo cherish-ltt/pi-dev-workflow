@@ -149,7 +149,6 @@ function validateGrillDraft(value: unknown, cwd: string): GrillDraft {
 		&& Number.isSafeInteger(question.id) && typeof question.question === "string" && question.question.trim()
 		&& Array.isArray(question.options) && question.options.length > 0
 		&& question.options.every((option) => typeof option === "string" && option.trim()))
-		|| new Set(questions.map((question) => question.id)).size !== questions.length
 		|| !draft.pairs.every((pair, index) => pair && typeof pair === "object"
 			&& Object.keys(pair).sort().join(",") === "answer,question"
 			&& pair.question === questions[index].question && typeof pair.answer === "string" && pair.answer.trim())) {

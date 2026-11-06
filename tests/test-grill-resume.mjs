@@ -69,7 +69,7 @@ async function project(run) {
 					};
 					return;
 				}
-				fs.writeFileSync(outputPath, JSON.stringify({ questions }));
+				fs.writeFileSync(outputPath, JSON.stringify({ questions: options.questions ?? questions }));
 			} else {
 				assert.equal(content, archives().at(-1).content, "only archived content may be sent");
 				assert.deepEqual(delivery, { deliverAs: "followUp" });
@@ -162,6 +162,24 @@ test("initial question and retry questionnaire both allow pause without complete
 			assert.deepEqual(outcome.messages, []);
 		});
 	}
+});
+
+test("valid duplicate question ids preserve distinct questions and answers across pause and resume", async () => {
+	await project(async ({ draft, command, archives }) => {
+		const duplicateQuestions = questions.map((question) => ({ ...question, id: 1 }));
+		await command("grill", [press(enter), press(enter), pause], { questions: duplicateQuestions });
+		const saved = JSON.parse(draft());
+		assert.deepEqual(saved.questions, duplicateQuestions);
+		assert.equal(saved.currentIndex, 1);
+		assert.deepEqual(saved.pairs, [{ question: questions[0].question, answer: questions[0].options[0] }]);
+		const resumed = await command("grill-resume", [press(enter), press(enter), press(enter), press(enter)]);
+		assert.equal(resumed.generationCount, 0);
+		assert.deepEqual(resumed.messages, []);
+		assert.equal(draft(), undefined);
+		for (const question of duplicateQuestions) {
+			assert.ok(archives()[0].content.includes(`问题: ${question.question}\n回答: ${question.options[0]}`));
+		}
+	});
 });
 
 test("resume refusal and later cancellation keep the exact previously saved version", async () => {
@@ -264,7 +282,7 @@ test("resume explicitly rejects damaged, unsupported, foreign and inconsistent d
 			{ ...savedDraft(), pairs: [{ question: "another question", answer: "answer" }] },
 			{ ...savedDraft(), pairs: [{ question: questions[0].question, answer: "" }] },
 			{ ...savedDraft(), questions: [{ ...questions[0], options: [42] }, ...questions.slice(1)] },
-			{ ...savedDraft(), questions: [{ ...questions[0], id: 2 }, ...questions.slice(1)] },
+			{ ...savedDraft(), questions: [{ ...questions[0], id: "1" }, ...questions.slice(1)] },
 		];
 		for (const value of cases) {
 			save(value);
