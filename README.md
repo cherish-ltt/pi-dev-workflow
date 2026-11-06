@@ -295,7 +295,7 @@ PRD 模板包含：Problem Statement、Solution、User Stories、Implementation 
 | **prompt-check** | 自制 | 只读探索需求、形成验收口径并确认；dev 命令也使用该技能 |
 | **project-audit-review** | 自制 | 全面审查项目，验证问题并逐项提交 Issue |
 | **karpathy-guidelines** | [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/andrej-karpathy-skills) | 基于 Andrej Karpathy 对 LLM 编码陷阱的观察，强调简洁、精准、可验证 |
-| **review-html** | 自制 | git diff / commit 审查，输出自包含的交互式 HTML 报告 |
+| **review-html** | 自制 | git diff / commit / 显式基准引用审查，输出自包含的交互式 HTML 报告 |
 | **[grilling](https://github.com/mattpocock/skills)** | [mattpocock/skills](https://github.com/mattpocock/skills) | 按设计树分轮追问方案、决策或想法，每轮强烈推荐用 `dev_ask` 收集当前可回答的决策 |
 | **to-prd** | [mattpocock/skills](https://github.com/mattpocock/skills) | 从对话上下文和代码库理解生成 PRD，保存到 `.pi-dev-output/pi-prd/` |
 
@@ -322,6 +322,8 @@ PRD 模板包含：Problem Statement、Solution、User Stories、Implementation 
 | **2** / Esc | 不是审查（放行给主代理） | 不启动审查，原消息交给当前 AI 处理 |
 
 也支持直接输入 `/skill:review-html` 触发审查。审查结果以交互式 HTML 报告形式写入 `.pi-dev-output/pi-review/html/` 目录。
+
+需要审查完整功能分支或版本累计改动时，输入 `/skill:review-html 基准引用：v0.12.0`，或在自动审查请求中明确“审查代码，基准引用：main”。基准可为一个本地 branch、tag 或 commit，目标固定为当前 HEAD。技能使用唯一 merge-base 到固定 HEAD 的净 diff，报告记录输入引用、实际 SHA、文件清单以及未纳入的未提交改动；不会自动 fetch、切换分支或按最近提交数猜测范围。无净变更时明确报告空结果，无效引用或不唯一的共同祖先则停止并提示；原有未提交改动、最近 N 个 commit 和显式全库审查仍可使用。
 
 ## 使用方式
 
