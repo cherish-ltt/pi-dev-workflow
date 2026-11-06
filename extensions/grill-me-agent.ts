@@ -2,7 +2,7 @@
  * grill-me-agent.ts — 设计追问（Grill）与 PRD 生成的运行时（运行在当前代理中）
  *
  * 职责：
- *   1. 注册 /grill 命令 — 对方案做追问式打磨，问答附到方案后交给当前代理
+ *   1. 注册 /grill 命令 — 对方案做追问式打磨，保存问答并可选交给当前代理
  *   2. 注册 /prd 命令   — 按需求描述生成 PRD，保存到 .pi-dev-output/pi-prd/
  *   3. runGrillPhase()  — 由当前代理生成评审问题，TUI 逐题呈现（选项 + 自定义输入）
  *   4. runPRDPhase()    — 由当前代理生成 PRD，并询问是否立即开始开发
@@ -372,7 +372,7 @@ export async function runGrillPhase(
 	const sentAt = Date.now();
 	pi.sendUserMessage(enhancedPrompt, { deliverAs: "followUp" });
 
-	const questions = (await pollFor(() => {
+	let questions = (await pollFor(() => {
 		const qs = readQuestionsFromFile(outputFilePath);
 		if (qs.length) return qs;
 		const parsed = parseGrillQuestions(getLastAssistantTextAfter(ctx, sentAt));
@@ -441,48 +441,8 @@ export async function runGrillPhase(
 				}
 
 				// Replace questions with retry results (with back support)
-				const pairs: Array<{ question: string; answer: string }> = [];
-				let rIdx = 0;
-				while (rIdx >= 0 && rIdx < retryQuestions.length) {
-					const q = retryQuestions[rIdx]!;
-					const previousAnswer = pairs[rIdx]?.answer;
-					const answer = await showQuestionTUI(ctx, q, rIdx + 1, retryQuestions.length, qTitlePrefix,
-						rIdx > 0, previousAnswer);
-					if (answer === null) {
-						return { ...defaultResult, cancelled: true, pairs };
-					}
-					if (answer === "__BACK__") {
-						if (rIdx > 0) {
-							rIdx--;
-							continue;
-						}
-						return { ...defaultResult, cancelled: true, pairs };
-					}
-					if (rIdx < pairs.length) {
-						pairs[rIdx] = { question: q.question, answer };
-					} else {
-						pairs.push({ question: q.question, answer });
-					}
-					rIdx++;
-				}
-				const qaBlock = pairs
-					.map((p, i) => `[追问问题 ${i + 1}]\n问题: ${p.question}\n回答: ${p.answer}`)
-					.join("\n\n");
-				const finalEnhancedPrompt = [
-					assembledPrompt,
-					"",
-					"---",
-					"## 设计追问记录",
-					"",
-					"以下是在开发前进行的设计评审问答，所有决策已确认：",
-					"",
-					qaBlock,
-				].join("\n");
-				return {
-					cancelled: false,
-					pairs,
-					enhancedPrompt: finalEnhancedPrompt,
-				};
+				questions = retryQuestions;
+				break;
 			}
 			case "⏭️ 跳过 Grill，直接发送 Prompt":
 				return defaultResult;
@@ -819,7 +779,7 @@ async function askDevelopmentStart(
 
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("grill", {
-		description: "(grill) 提交前追问式打磨方案 — AI 逐题追问，问答附到方案后交给当前代理执行",
+		description: "(grill) 提交前追问式打磨方案 — 保存原方案与问答，可选发送给当前代理",
 		handler: async (args, ctx) => {
 			if (!ctx.hasUI) {
 				ctx.ui.notify("/grill 需要交互式界面", "error");
@@ -840,17 +800,30 @@ export default function (pi: ExtensionAPI) {
 				questionTitle: "方案追问完善",
 			});
 			if (result.cancelled) {
-				ctx.ui.notify("已取消追问，未发送任何内容", "info");
+				ctx.ui.notify("已取消追问，未发送执行方案的请求", "info");
 				return;
 			}
 			if (result.pairs.length === 0) {
-				ctx.ui.notify("未进入追问，未发送任何内容", "info");
+				ctx.ui.notify("未完成追问，未发送执行方案的请求", "info");
 				return;
 			}
 
-			saveAnswerFile(ctx.cwd, result.enhancedPrompt);
-			pi.sendUserMessage(result.enhancedPrompt, { deliverAs: "followUp" });
-			ctx.ui.notify("追问完成，方案已发送给当前代理", "info");
+			let answerPath: string;
+			try {
+				answerPath = saveAnswerFile(ctx.cwd, result.enhancedPrompt);
+			} catch (error) {
+				ctx.ui.notify(`方案保存失败，未发送执行请求：${error instanceof Error ? error.message : String(error)}`, "error");
+				return;
+			}
+			ctx.ui.notify(`完整方案已保存：${answerPath}`, "info");
+			const choice = await uiSelect(ctx, `追问完成，归档：${answerPath}`, ["仅保存", "保存并发送"]);
+			if (choice !== "保存并发送") return;
+			try {
+				pi.sendUserMessage(result.enhancedPrompt, { deliverAs: "followUp" });
+				ctx.ui.notify(`已请求向当前代理发送方案；归档保留：${answerPath}。若 Pi 报告发送失败，可从该文件重试。`, "info");
+			} catch (error) {
+				ctx.ui.notify(`方案发送失败：${error instanceof Error ? error.message : String(error)}。归档已保留：${answerPath}`, "error");
+			}
 		},
 	});
 
