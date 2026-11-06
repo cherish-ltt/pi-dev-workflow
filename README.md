@@ -87,13 +87,19 @@ pi-package/
 
 ## Git 命令
 
-三个命令直接通过 pi 的内置执行器运行 git，结果写入当前会话上下文，不需要隔离的子代理进程。
+五个命令直接通过 pi 的内置执行器运行 git，结果写入当前会话上下文，不需要隔离的子代理进程。
 
 | 命令 | 说明 |
 |---|---|
 | `/git-commit [message]` | 暂存所有变更并提交（空信息会让 AI 根据 diff 自动生成 Conventional Commits message） |
 | `/git-push` | 推送到远程 |
 | `/git-commit-push [message]` | 暂存 + 提交 + 推送一键完成 |
+| `/git-commit-staged [message]` | 仅提交已暂存内容，message 必填；未传参数时弹出输入框 |
+| `/git-commit-staged-push [message]` | 仅提交已暂存内容，成功后推送；message 必填 |
+
+先在 Git/IDE 中选定文件或代码块，再执行 `/git-commit-staged feat: 增加登录校验`。这两个新命令不会自动暂存其他修改；暂存区为空、消息为空或取消输入时，不提交、不推送，也不转入 AI 分批提交。消息原文按单个参数传给 Git，旧命令仍把 `--staged` 等文本视为普通提交信息。
+
+提交失败会显示 Git 的错误且不继续推送；推送失败会明确说明提交仍保留，可用 `/git-push` 重试。仅暂存限制的是本次新提交，`git push` 仍可能推送分支上其他未推送的提交。Git hooks 照常运行，钩子或其他进程并发修改 index/文件不在内容隔离保证内。
 
 ## 结构化提问（dev_ask）
 
@@ -375,7 +381,7 @@ A: [grilling](https://github.com/mattpocock/skills) 是 skill（`/skill:grilling
 A: 检测到审查意图时选择"2. 不是审查"即可放行原消息给当前代理。如果需要完全关闭，可以在 `extensions/review-detect.ts` 中移除 `pi.on("input")` 的审查拦截逻辑。
 
 **Q: Git 命令需要子代理吗？**
-A: 不需要。`/git-commit`、`/git-push`、`git-commit-push` 直接通过 pi 的内置执行器运行 git，结果会出现在当前会话中。
+A: 不需要。Git 命令均直接通过 pi 的内置执行器运行 git，包括仅暂存的 `/git-commit-staged` 与 `/git-commit-staged-push`，结果会出现在当前会话中。
 
 **Q: `/dev-pre-check` 会顺手改代码吗？**
 A: 不会。意图校验阶段的提示词明确禁止修改/创建/删除文件、禁止运行有副作用的命令、禁止调用写入类工具、禁止输出代码与实施方案；只允许只读探查，并要求先探查代码库、在「已核实的现状」里交代真实文件与检索范围。只有你选择「是 — 意图正确，开始执行」后，才会把原始 prompt 作为真正的工作下发。

@@ -1,17 +1,19 @@
 /**
  * Git Commands Extension
  *
- * Registers three commands:
+ * Registers five commands:
  *   /git-commit [message]       - Commit changes
  *   /git-push                   - Push commits to remote
  *   /git-commit-push [message]  - Commit and push in one go
+ *   /git-commit-staged [message] - Commit only the current index
+ *   /git-commit-staged-push [message] - Commit the index, then push
  *
- * 传入消息时快速执行：暂存全部 → 提交/推送。
- * 不传消息时把任务交给当前代理：由其查看 diff、识别变更并按
+ * 原有提交命令传入消息时快速执行：暂存全部 → 提交/推送。
+ * 原有命令不传消息时把任务交给当前代理：由其查看 diff、识别变更并按
  * Conventional Commits 规范分批提交（提交信息用中文）。
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { uiInput } from "./ui-helpers";
 
 // ── 委托给当前代理的任务描述 ─────────────────────────────────
@@ -112,4 +114,39 @@ export default function (pi: ExtensionAPI) {
 			pi.sendUserMessage(COMMIT_PUSH_TASK, { deliverAs: "followUp" });
 		},
 	});
+
+	for (const push of [false, true]) {
+		pi.registerCommand(push ? "git-commit-staged-push" : "git-commit-staged", {
+			description: push ? "Commit only staged changes, then push (message required)" : "Commit only staged changes (message required)",
+			handler: async (args, ctx) => {
+				const message = args.trim() ? args : await uiInput(ctx, "Commit message（仅提交已暂存内容）", "请输入提交信息；留空或 Esc 结束，不交由 AI 提交");
+				if (message === undefined) return;
+				if (!message.trim()) {
+					ctx.ui.notify("仅暂存提交需要非空提交信息。", "warning");
+					return;
+				}
+
+				try {
+					const result = await pi.exec("git", ["diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv", "--"], { cwd: ctx.cwd, timeout: 120_000 });
+					if (result.code === 0) {
+						ctx.ui.notify("没有已暂存的变更，未提交或推送。", "info");
+						return;
+					}
+					if (result.code !== 1) {
+						const detail = result.stderr?.trim() || result.stdout?.trim() || "未知错误";
+						ctx.ui.notify(`检查暂存区失败 (exit ${result.code}): ${detail}`, "error");
+						return;
+					}
+				} catch (error) {
+					ctx.ui.notify(`检查暂存区异常: ${error instanceof Error ? error.message : String(error)}`, "error");
+					return;
+				}
+
+				const commitOk = await runGitCommand(pi, ctx, ["commit", "--cleanup=verbatim", "-m", message], "提交已暂存内容");
+				if (!commitOk || !push) return;
+				const pushOk = await runGitCommand(pi, ctx, ["push"], "推送到远程");
+				if (!pushOk) ctx.ui.notify("已提交，但推送失败；提交仍保留，可单独重试 /git-push。", "warning");
+			},
+		});
+	}
 }
